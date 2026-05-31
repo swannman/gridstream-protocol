@@ -1,0 +1,1483 @@
+<!DOCTYPE html>
+<!-- v3.0 — 2026-05-30: full-corpus rework (74,120 CRC-good D5/0x55/0xA5 pkts across 83 meters + 13,012 0xD2 frames).
+     - byte 4 is RESERVED/always-zero (NOT a flags field); nonzero = CRC-excluded bit-flip noise (Q11 resolved)
+     - CI byte: high nibble = frame class, low nibble = link-transport sub-mode (NOT direction, NOT app-type)
+     - CI=0x55 / len-71 value field is NOT a recoverable register value (Q1 falsified: r=0.107 vs PSE kWh)
+     - COSEM classes follow standard numbering (8 Clock..12 Association_SN..15 Association_LN) w/ vendor extensions 13/14/16 interleaved
+     - 0xD2 nonce (full 9-byte header) is essentially unique: NO exploitable nonce reuse
+     - added real captured examples: D5 len-20/25/29/125, D2 len-4/5/16 -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GridStream Packet Analyzer</title>
+<style>
+  :root {
+    --c-phy: #3b82f6;
+    --c-mac: #10b981;
+    --c-addr: #8b5cf6;
+    --c-session: #f59e0b;
+    --c-cosem: #ec4899;
+    --c-wmbus: #ef4444;
+    --c-value: #eab308;
+    --c-const: #94a3b8;
+    --c-crc: #64748b;
+    --bg: #0f172a;
+    --bg-alt: #1e293b;
+    --bg-card: #1e293b;
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+    --border: #334155;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  header {
+    padding: 1.5rem 2rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-alt);
+  }
+  header h1 {
+    margin: 0 0 0.3rem 0;
+    font-size: 1.4rem;
+    font-weight: 600;
+  }
+  header p {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+  }
+  .container {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 1rem;
+    padding: 1rem;
+    max-width: 1600px;
+    margin: 0 auto;
+  }
+  @media (max-width: 900px) {
+    .container { grid-template-columns: 1fr; }
+  }
+  .sidebar {
+    background: var(--bg-card);
+    border-radius: 8px;
+    padding: 1rem;
+    position: sticky;
+    top: 1rem;
+    align-self: start;
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
+  }
+  .sidebar h2 {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+  }
+  .sidebar ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .sidebar li { margin: 0.25rem 0; }
+  .sidebar button {
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text);
+    padding: 0.6rem 0.75rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.85rem;
+    transition: all 0.15s;
+  }
+  .sidebar button:hover { background: var(--bg); }
+  .sidebar button.active {
+    background: var(--bg);
+    border-color: var(--c-mac);
+  }
+  .sidebar button.custom {
+    border-color: var(--c-session);
+    background: linear-gradient(135deg, rgba(245,158,11,0.08), rgba(245,158,11,0.02));
+  }
+  .sidebar button.custom.active {
+    border-color: var(--c-session);
+    background: rgba(245,158,11,0.1);
+  }
+  .sidebar .divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 0.6rem 0 0.5rem;
+  }
+  .sidebar button .pkt-title {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 0.2rem;
+  }
+  .sidebar button .pkt-meta {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+  }
+  .custom-input-area {
+    background: var(--bg-card);
+    border-radius: 8px;
+    padding: 1rem;
+    border-left: 4px solid var(--c-session);
+  }
+  .custom-input-area h3 {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+  }
+  .custom-input-area textarea {
+    width: 100%;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.75rem;
+    font-family: 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+    resize: vertical;
+    min-height: 100px;
+  }
+  .custom-input-area .controls {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    margin-top: 0.75rem;
+    flex-wrap: wrap;
+  }
+  .custom-input-area button {
+    padding: 0.55rem 1.1rem;
+    background: var(--c-mac);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 600;
+    font-size: 0.85rem;
+  }
+  .custom-input-area button:hover { opacity: 0.9; }
+  .custom-input-area button.secondary {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .custom-input-area .hint {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+  .custom-input-area .error {
+    color: #f87171;
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+  }
+  .custom-input-area .ok {
+    color: #34d399;
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+  }
+  .main {
+    min-width: 0; /* enable text wrapping inside flex/grid */
+  }
+  .main h2 {
+    margin: 0 0 0.5rem 0;
+    font-size: 1.3rem;
+  }
+  .summary {
+    color: var(--text-dim);
+    margin: 0 0 1.5rem 0;
+    font-size: 0.95rem;
+  }
+  .section-label {
+    margin: 1.5rem 0 0.5rem 0;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+  .hex-display {
+    background: var(--bg-card);
+    border-radius: 8px;
+    padding: 1rem;
+    font-family: 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+    overflow-x: auto;
+  }
+  .hex-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    line-height: 1;
+  }
+  .byte {
+    position: relative;
+    padding: 0.35rem 0.4rem 0.6rem;
+    border-radius: 3px;
+    background: rgba(255,255,255,0.03);
+    border-bottom: 3px solid transparent;
+    cursor: pointer;
+    transition: all 0.15s;
+    min-width: 1.6em;
+    text-align: center;
+    user-select: none;
+  }
+  .byte.highlight {
+    background: rgba(255,255,255,0.15) !important;
+    transform: translateY(-1px);
+  }
+  .byte .off {
+    position: absolute;
+    bottom: -1.1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    line-height: 1;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin: 2rem 0 1rem;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.35rem; }
+  .legend-swatch {
+    width: 14px; height: 14px;
+    border-radius: 3px;
+    display: inline-block;
+  }
+  .field-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .layer-group {
+    background: var(--bg-card);
+    border-radius: 8px;
+    padding: 1rem;
+    border-left: 4px solid var(--border);
+  }
+  .layer-group h3 {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+  }
+  .layer-group ul {
+    list-style: none;
+    margin: 0; padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .field {
+    background: var(--bg);
+    border-radius: 6px;
+    padding: 0.6rem 0.75rem;
+    cursor: pointer;
+    transition: background 0.15s;
+    border: 1px solid transparent;
+  }
+  .field:hover, .field.highlight {
+    background: rgba(255,255,255,0.03);
+    border-color: var(--border);
+  }
+  .field-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.3rem;
+  }
+  .field-offset {
+    font-family: 'SF Mono', Menlo, monospace;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    background: var(--bg-alt);
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+  }
+  .field-name {
+    font-weight: 600;
+    flex-grow: 1;
+  }
+  .field-value {
+    font-family: 'SF Mono', Menlo, monospace;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+  .field-notes {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    margin-top: 0.2rem;
+  }
+  .field-notes code {
+    background: var(--bg-alt);
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    font-size: 0.8rem;
+  }
+  .badge {
+    display: inline-block;
+    font-size: 0.7rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    background: var(--bg-alt);
+    color: var(--text-dim);
+    margin-left: 0.4rem;
+  }
+  .badge-confirmed { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+  .badge-tentative { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+  footer {
+    margin: 2rem 0 1rem;
+    padding: 1rem 2rem;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    text-align: center;
+    border-top: 1px solid var(--border);
+  }
+  footer a { color: var(--c-mac); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>GridStream Packet Analyzer</h1>
+  <p>Landis+Gyr GridStream RF protocol &mdash; PSE Woodinville deployment. Click a packet type to explore its structural breakdown.</p>
+</header>
+
+<div class="container">
+  <aside class="sidebar">
+    <h2>Packet Types</h2>
+    <ul id="packet-list"></ul>
+  </aside>
+
+  <main class="main">
+    <h2 id="packet-title">Select a packet</h2>
+    <p class="summary" id="packet-summary"></p>
+
+    <div class="section-label">Hex dump</div>
+    <div class="hex-display">
+      <div class="hex-grid" id="hex-display"></div>
+    </div>
+
+    <div class="legend" id="legend"></div>
+
+    <div class="section-label">Field breakdown</div>
+    <div class="field-list" id="field-list"></div>
+  </main>
+</div>
+
+<footer>
+  Built from the 2026-05-30 full-corpus audit: 74,120 CRC-good packets across 83 meters, plus 13,012 0xD2 frames &mdash;
+  see <code>Landis+Gyr GridStream Protocol.md</code> for full details
+</footer>
+
+<script>
+const LAYER_COLORS = {
+  phy:     '#3b82f6',
+  mac:     '#10b981',
+  addr:    '#8b5cf6',
+  session: '#f59e0b',
+  cosem:   '#ec4899',
+  wmbus:   '#ef4444',
+  value:   '#eab308',
+  const:   '#94a3b8',
+  crc:     '#64748b',
+};
+const LAYER_NAMES = {
+  phy: 'PHY (Physical layer)',
+  mac: 'MAC (Link layer)',
+  addr: 'Addresses',
+  session: 'Session header (L+G)',
+  cosem: 'COSEM / DLMS addressing',
+  wmbus: 'WMBus DIF / VIF',
+  value: 'Variable value bytes',
+  const: 'Constants / padding',
+  crc: 'CRC',
+};
+const LAYER_ORDER = ['phy','mac','addr','session','const','cosem','wmbus','value','crc'];
+
+// Parse hex string into array of byte values (and pretty-strings)
+function parseHex(s) {
+  return s.replace(/\s+/g, '').match(/.{1,2}/g).map(h => h.toUpperCase());
+}
+
+// =====================================================================
+// FIELD_DEFS — canonical descriptions for every field that appears across
+// multiple packet types. Each PACKETS entry references these via f() so
+// the name and notes stay consistent everywhere.
+// =====================================================================
+const FIELD_DEFS = {
+  sync: {
+    layer: 'phy',
+    name: 'Sync / preamble',
+    notes: '<code>80 FF 2A</code> &mdash; standard L+G GridStream preamble + sync delimiter. OUTSIDE CRC coverage; any bit drift here is corruption that snuck past the sync detector, not a protocol variant.'
+  },
+  type_55: {
+    layer: 'mac',
+    name: 'Type',
+    notes: '<code>0x55</code> &mdash; broadcast frame. Network-wide announcement to all meters; pairs with the <code>FF×6 + FE</code> broadcast destination at offset 7.'
+  },
+  type_a5: {
+    layer: 'mac',
+    name: 'Type',
+    notes: '<code>0xA5</code> &mdash; scheduled / beacon frame. Uses a 5-byte header (no flags byte); body starts at offset 5.'
+  },
+  type_d5: {
+    layer: 'mac',
+    name: 'Type',
+    notes: '<code>0xD5</code> &mdash; directed mesh frame (78% of corpus traffic). Carries both control and data variants depending on length and CI.'
+  },
+  type_d2: {
+    layer: 'mac',
+    name: 'Type',
+    notes: '<code>0xD2</code> &mdash; directed mesh frame, 5-byte header (like 0xA5). <strong>Mostly plaintext, not exclusively encrypted</strong>: CI=<code>0x53</code>/<code>0x22</code> sub-variants are plaintext L+G COSEM-style; only CI=<code>0x52</code> is encrypted. ALL 0xD2 frames fail standard CRC (their trailing 2 bytes are a MAC or are uncovered), which is expected, not corruption.'
+  },
+  reserved_b4: {
+    layer: 'mac',
+    name: 'Reserved (byte 4)',
+    notes: '<strong>Reserved byte, <code>0x00</code> in valid frames.</strong> Originally hypothesized (pre-2026-05-30) to be an 8-bit flags field because a handful of packets showed individual bits set. The full-corpus audit (74,120 CRC-good packets) resolved this (Q11): byte 4 lies <em>outside</em> the CRC coverage window &mdash; the CRC protects byte 6 through len&minus;2 &mdash; so a single-bit flip here still passes CRC. The ~12 "flag-set" siblings were RF bit-flip noise on a reserved byte, not a real field. 0xA5/0xD2 frames have no reserved byte: their 5-byte header puts the length at byte 4.'
+  },
+  length: {
+    layer: 'mac',
+    name: 'Length',
+    notes: 'Body length in bytes, NOT including the header. Total packet size = header (6 B for 0xD5/0x55; 5 B for 0xA5/0xD2) + this value.'
+  },
+  ci: {
+    layer: 'mac',
+    name: 'CI (Control Information)',
+    notes: 'WMBus-style packet-purpose byte (IEC 13757-3 §6.6). Independent of length &mdash; multiple CIs appear at one length, and one CI appears at multiple lengths. The <strong>high nibble is the frame class</strong>: <code>0x2X</code> directed-data, <code>0x3X</code> broadcast, <code>0x5X</code> status-push, <code>0x8X</code> bulk-transfer. The <strong>low nibble is a link-transport sub-mode</strong> &mdash; NOT a direction bit and NOT an application type (tested 2026-05-30). Observed: <code>0x21</code>/<code>0x22</code>/<code>0x29</code> (directed mesh sub-modes), <code>0x30</code> (broadcast Full-Read), <code>0x3C</code> (beacon), <code>0x51</code> (status push), <code>0x52</code> (encrypted, 0xD2), <code>0x53</code> (0xD2 keepalive), <code>0x55</code> (extended status push, larger data types), <code>0x81</code> (bulk transfer, 0xD5/len-125).'
+  },
+  dst: {
+    layer: 'addr',
+    name: 'Destination LAN ID',
+    notes: '4-byte L+G mesh address &mdash; the intended recipient for directed/relayed routing.'
+  },
+  src: {
+    layer: 'addr',
+    name: 'Source LAN ID',
+    notes: 'Originating meter. Network-wide unique 4-byte L+G LAN ID.'
+  },
+  src_a5: {
+    layer: 'addr',
+    name: 'Source LAN ID',
+    notes: 'Originating meter. Starts at byte 6 (not 7) because 0xA5/0xD2 frames use a 5-byte header with no flags byte.'
+  },
+  bcast_dst: {
+    layer: 'addr',
+    name: 'Broadcast destination',
+    notes: '<code>FF FF FF FF FF FF FE</code> &mdash; 7-byte all-stations broadcast address. The longer destination field shifts the source LAN ID to byte 14 in broadcast frames.'
+  },
+  bcast_src: {
+    layer: 'addr',
+    name: 'Source LAN ID',
+    notes: 'Originating meter. In broadcast frames, source starts at byte 14 (after the 7-byte broadcast destination).'
+  },
+  bcast_src_repeat: {
+    layer: 'addr',
+    name: 'Source LAN ID (repeat)',
+    notes: 'Second copy of the source LAN ID embedded inside the broadcast body. Always equals the original source at bytes 14-17. Purpose unclear &mdash; possibly a vendor field for source verification.'
+  },
+  session_byte15: {
+    layer: 'session',
+    name: 'Session byte 15',
+    notes: 'High-entropy byte immediately before the Unix timestamp. Purpose unknown &mdash; not yet decoded. Could be a sequence/transaction ID, nonce, or part of a partial frame counter.'
+  },
+  session_seq: {
+    layer: 'session',
+    name: 'Session / sequence',
+    notes: 'Variable bytes between addresses and the COSEM payload. Purpose unclear &mdash; possibly a transaction ID, mesh sequence counter, or partial timestamp.'
+  },
+  unix_time: {
+    layer: 'session',
+    name: 'Unix timestamp',
+    notes: '<strong>Validated.</strong> 4-byte BE Unix timestamp at 1 Hz monotonic rate. Increments by exactly 1 per second across all neighbor meters; acts as a network time reference.',
+    confirmed: true
+  },
+  axdr_null: {
+    layer: 'const',
+    name: 'A-XDR null-data tag',
+    notes: '<code>0x00</code> constant (100% of packets at this offset). A-XDR primitive tag for null/separator (IEC 13757-3 / Blue Book Annex).'
+  },
+  axdr_array: {
+    layer: 'const',
+    name: 'A-XDR array tag',
+    notes: '<code>0x01</code> in 95%+ of packets (occasionally <code>0x00</code>). A-XDR primitive tag for array.'
+  },
+  sn_value_digest: {
+    layer: 'session',
+    name: 'SN-value digest',
+    notes: '<strong>Deterministic per-attribute digest.</strong> Confirmed 2026-05-27: digest value is constant across packets for any given (SN, src LAN ID, DIF, VIF, timestamp) tuple (532/532 such tuples produced a constant digest in the test corpus). Brute-forced 8 CRC variants × 9 candidate inputs &mdash; no plain hash matches. Most likely a <strong>keyed HMAC</strong> using the meter\'s individual AES-256 key (vaulted in HES Key Manager, per L+G Security Architecture &sect;6.2) &mdash; not recoverable without the key. NOT a measurement: was previously misdecoded as "instantaneous Watts × 100"; invalidated 2026-05-27 (Pearson r = -0.08 against PSE actual hourly kWh). Practical value if recovered: per-packet tamper detection.'
+  },
+  uptime: {
+    layer: 'session',
+    name: 'Uptime since power-on',
+    notes: '<strong>Validated.</strong> 4-byte BE count of seconds since the meter last booted, 1 Hz monotonic. <code>unix_time − uptime</code> = the last power-on moment; resolves to Oct 27 2025 ~14:49 PDT for our neighborhood (matches the known PSE outage Oct 25-28 2025, when all 14+ neighbors restored simultaneously). Use as outage detector: a sudden uptime reset signals power loss.',
+    confirmed: true
+  },
+  lg_const_a40b: {
+    layer: 'const',
+    name: 'L+G protocol constant',
+    notes: '<code>A4 0B</code> &mdash; universal across all GridStream deployments (independently confirmed in non-PSE captures). Purpose unknown; likely a protocol-version or framing marker.'
+  },
+  routing_trailer_start: {
+    layer: 'const',
+    name: 'Routing trailer start',
+    notes: '<code>01 01</code> &mdash; constant marker beginning the L+G routing trailer region.'
+  },
+  sentinel_fe: {
+    layer: 'const',
+    name: 'Sentinel',
+    notes: '<code>0xFE</code> &mdash; constant separator preceding the source-address repeats in the routing trailer.'
+  },
+  src_repeat: {
+    layer: 'addr',
+    name: 'Source LAN ID (repeat)',
+    notes: 'Equals bytes 11-14 in 100% of packets. The routing trailer repeats the source address twice; purpose unclear &mdash; possibly a relay/route-record field that degenerates to the source for unsolicited self-status pushes.'
+  },
+  separator_00: {
+    layer: 'const',
+    name: 'Separator',
+    notes: '<code>0x00</code> &mdash; constant separator between fields in the routing trailer.'
+  },
+  routing_trailer_end: {
+    layer: 'const',
+    name: 'Routing trailer end',
+    notes: '<code>01 03 25</code> &mdash; constant marker closing the L+G routing trailer region.'
+  },
+  zero_padding: {
+    layer: 'const',
+    name: 'Zero padding',
+    notes: '<code>00 × 11</code> &mdash; eleven null bytes. Likely reserved space in the L+G session header structure (perhaps for future-use fields or alignment).'
+  },
+  payload_transition: {
+    layer: 'value',
+    name: 'Payload transition',
+    notes: 'Variable bytes immediately before the COSEM payload. <strong>In CI=0x51 status pushes</strong>, the purpose is unclear &mdash; they vary per packet but haven\'t been decoded. <strong>In CI=0x55 extended status pushes</strong>, these carry uint24-magnitude values (e.g., <code>0x02CAD8</code> = 182,488). Once the leading candidate for a plaintext register, this was <strong>tested and rejected (Q1, 2026-05-30)</strong>: hour-binned against our own meter\'s PSE Green Button hourly kWh, the per-object value shows no correlation (Pearson r &asymp; 0.107) and its range (3..6006) is far too small for a cumulative kWh register. No plaintext billing value is recoverable from the RF &mdash; metrology lives in the encrypted/keyed objects.'
+  },
+  cosem_class_id: {
+    layer: 'cosem',
+    name: 'COSEM class_id (BE)',
+    notes: '2-byte big-endian COSEM interface-class identifier. Distribution: <code>0x000C</code> (66-73%), <code>0x000D</code> (25%), <code>0x000F</code> (4%), <code>0x000E</code> (1%), <code>0x0010</code> (0.4%). <strong>Revised 2026-05-30 (Q3/Q4):</strong> the values are NOT arbitrary &mdash; they fall in a <em>contiguous 8&ndash;20 (0x08&ndash;0x14) band matching the standard IEC 62056 COSEM interface-class numbering</em>: 8=Clock, 9=Script_table, 10=Schedule, 11=Special_days, 12=Association_SN, 15=Association_LN, with vendor-specific classes interleaved at 13/14/16. (An earlier 2026-05-27 read called these proprietary because class 12 &ne; Push_setup &mdash; but 12 <em>is</em> Association_SN in the SN-referencing profile L+G uses here, so the standard model fits.) The attribute/SN allocations <em>within</em> each class remain L+G-specific.'
+  },
+  lg_marker_09: {
+    layer: 'cosem',
+    name: 'L+G marker',
+    notes: '<code>0x09</code> &mdash; first byte of L+G\'s 2-byte "attribute value follows" calling convention (<code>09 03</code>). Position varies by packet type but always immediately after the COSEM class_id.'
+  },
+  lg_marker_03: {
+    layer: 'cosem',
+    name: 'L+G marker',
+    notes: '<code>0x03</code> &mdash; second byte of the L+G "attribute value follows" marker (<code>09 03</code>).'
+  },
+  sub_selector: {
+    layer: 'cosem',
+    name: 'Sub-selector',
+    notes: 'L+G-specific selector byte appearing after the <code>09 03</code> marker in certain packet types. <code>0x04</code> in 0xD5/len-23, <code>0x05</code> in 0xD5/len-28. Likely an attribute index or instance discriminator that determines how the following payload is parsed.'
+  },
+  attribute_selector: {
+    layer: 'cosem',
+    name: 'Attribute selector',
+    notes: 'L+G-internal attribute/register code that correlates with the COSEM class_id. Association_SN (class 12) uses C3-CD range, class 14 (vendor) uses D8-D9, Association_LN (class 15) uses F2-F4. NOT a DLMS APDU service tag &mdash; structural test failed (bytes 66-70 invariant regardless of byte 65 value).'
+  },
+  lg_obis_prefix: {
+    layer: 'cosem',
+    name: 'L+G OBIS prefix',
+    notes: '<code>20 30 2D 84 80</code> &mdash; 5-byte vendor-extended logical-name reference. Identical between 0xD5/len-28 (bytes 23-27) and 0xD5/len-71 (bytes 66-70). Possibly a 5-byte OBIS code with implicit F=<code>0xFF</code>, or a vendor object reference. Specific encoding not yet decoded.'
+  },
+  dlms_sn: {
+    layer: 'cosem',
+    name: 'DLMS Short Name (SN)',
+    notes: '2-byte big-endian attribute identifier in a DLMS-style short-name space. Functions like a DLMS Association_SN entry but uses L+G\'s own allocation, not IEC TR 62056-61. Values in our corpus span <code>0x0041-0x177F</code>; same values appear across multiple meters (network-wide shared identifier space) &mdash; exactly the behavior Association_SN-style addressing predicts, since PSE provisioned all meters with the same identifier→attribute dictionary. The L+G mapping itself is undocumented externally; recovery requires ground-truth correlation against PSE Green Button hourly data or cross-utility comparison (Oncor uses CRC init <code>0x5FD6</code>, CoServ <code>0x45F8</code> &mdash; if their SN allocations match ours, points to a universal L+G default).'
+  },
+  wmbus_dif: {
+    layer: 'wmbus',
+    name: 'WMBus DIF',
+    notes: 'WMBus Data Information Field (IEC 13757-3 §6.2.2). Parses cleanly in 99-100% of data-bearing packets: bit 7 = 0 (no extension), bits 6-5 = 00 (instantaneous), bit 4 = 1 (storage 1), bits 3-0 = data length code. Common codes: <code>0x11</code> uint8 (most common), <code>0x12</code> uint16, <code>0x14</code> uint32, <code>0x15</code> float32, <code>0x17</code> uint64, <code>0x18</code> selection-for-readout, <code>0x19/0x1A/0x1B</code> BCD.'
+  },
+  wmbus_vif: {
+    layer: 'wmbus',
+    name: 'WMBus VIF',
+    notes: 'WMBus Value Information Field (IEC 13757-3 §6.2.4). Low nibble is <code>0</code> in 100% of packets &mdash; L+G uses a custom VIF table where bits 0-3 are reserved. High nibble (0-A range) encodes a unit class. Full L+G VIF mapping not yet decoded.'
+  },
+  bcast_trailer: {
+    layer: 'const',
+    name: 'Broadcast trailer (2 fields)',
+    notes: 'Originally documented as constant <code>7E 70</code>; empirical analysis 2026-05-27 against 1,790 broadcasts shows it\'s a <strong>two-field structure</strong>: byte 37 = <code>0x7E</code> universally (99.2%), byte 38 = <strong>variable code</strong> (<code>0x70</code> dominant at 99.2%, with <code>0x10</code>/<code>0x80</code>/<code>0x90</code>/<code>0x00</code> observed in 14 packets &mdash; all of which have CI=<code>0x30</code> Full Read). The low byte appears to be a status/flag code meaningful only in Full-Read response packets. Broadcasts carry only the COSEM SN reference, NOT the actual value &mdash; the trailer occupies the position where DIF+VIF+value would be in directed packets.'
+  },
+  crc16: {
+    layer: 'crc',
+    name: 'CRC-16',
+    notes: 'CRC-16/CCITT, polynomial <code>0x1021</code>, init <code>0x142A</code> (PSE-specific). Covers body bytes from offset <code>header_len</code> (6 for 0x55/0xD5, 5 for 0xA5/0xD2) through 2 bytes before this CRC.'
+  },
+  // Packet-specific / less-common fields
+  mesh_control_payload: {
+    layer: 'value',
+    name: 'Mesh control payload',
+    notes: 'Variable bytes. No DLMS/COSEM markers in this region across the corpus. Likely L+G mesh routing/state/sequence fields (HELLO, keepalive, route-update). Not yet structurally decoded.'
+  },
+  bcast_const_00: {
+    layer: 'const',
+    name: 'Constant 0x00',
+    notes: '<code>0x00</code> separator between source LAN ID and session bytes in broadcast frames.'
+  },
+  bcast_const_01: {
+    layer: 'const',
+    name: 'Constant 0x01',
+    notes: '<code>0x01</code> between the source-repeat and the COSEM class_id in broadcast frames.'
+  },
+  bcast_session: {
+    layer: 'session',
+    name: 'Session / partial timestamp',
+    notes: 'Variable bytes in broadcast frames. Likely a partial timestamp or sequence/transaction identifier; the broadcast variant of the more detailed session header found in 0xD5/len-71 status pushes.'
+  },
+  beacon_payload: {
+    layer: 'value',
+    name: 'Beacon payload',
+    notes: 'Variable bytes in 0xA5 scheduled beacon frames. Likely time-sync, slot-counter, or routing metadata. Byte 14 acts as a network-wide slot counter that decrements ~1 per 30 minutes.'
+  },
+  generic_payload: {
+    layer: 'value',
+    name: 'Payload (unrecognized cluster)',
+    notes: 'Length doesn\'t match a documented cluster spec. Showing the universal header decode only; the body is opaque without a matching field map.'
+  },
+  // 0xD2 (directed mesh, MOSTLY PLAINTEXT) specific fields. Only CI=0x52 is
+  // encrypted; CI=0x53/0x22 are plaintext. ALL 0xD2 frames fail standard CRC
+  // (13,012/13,012 brute-force tested 2026-05-30), so their last 2 bytes are a
+  // MAC or are uncovered, not a CRC.
+  d2_seq: {
+    layer: 'session',
+    name: 'Sequence / nonce',
+    notes: 'Variable per-packet byte. Likely a frame counter or nonce used as input to the encryption / authentication mechanism.'
+  },
+  d2_const_0102: {
+    layer: 'const',
+    name: 'Mostly 0x01 0x02 (varies)',
+    notes: 'Dominant 2-byte pattern `01 02` across observed 0xD2/CI=0x52 packets, though variations occur. Originally documented as a constant; actually varies in a minority of packets, suggesting it\'s part of the AAD (authenticated additional data) and may participate in the cipher nonce derivation rather than being purely a protocol marker.'
+  },
+  d2_const_0001: {
+    layer: 'const',
+    name: 'Mostly 0x00 0x01 (varies)',
+    notes: 'Dominant 2-byte pattern `00 01` immediately after the timestamp in 0xD2/CI=0x52 packets. Originally documented as constant; empirical analysis shows variants like `00 09` appear, so this field also varies. Likely part of the AAD region of the AEAD construction.'
+  },
+  d2_ciphertext: {
+    layer: 'value',
+    name: 'Ciphertext / encrypted payload',
+    notes: 'High-entropy bytes that vary per packet &mdash; the encrypted payload. 6 bytes is too short to carry full COSEM with addresses, so this is most likely a compressed mesh-internal command (route update, key rotation, short directed-poll response, or ACK) rather than meter data. The 6-byte length rules out AES-CBC (which would require 8-byte block alignment) and is consistent with a CTR or CCM-family stream cipher. Not decodable without the encryption key.'
+  },
+  d2_auth_tag: {
+    layer: 'crc',
+    name: 'Authentication tag (NOT CRC)',
+    notes: '2-byte truncated cryptographic authentication tag, NOT a CRC. Brute-force tested against all 65,536 CRC-16 init values across 13,012 captured 0xD2 frames &mdash; none validated (vs CRC-16 poly 0x1021 / init 0x142A working perfectly for every other packet type). Last-2-byte distribution is near-fully unique, the entropy signature of a per-packet MAC. <strong>Nonce-reuse test (Q12a, 2026-05-30):</strong> the full 9-byte header (bytes 6-14) is effectively unique per CI=0x52 frame &mdash; no exploitable AES-CCM/CTR nonce reuse (same nonce + different ciphertext) was found, so the AEAD is correctly keyed per endpoint. WMBus Mode 7 (CTR+CMAC) and Mode 9 (AES-CCM) both permit MAC truncation and the framing matches their shape, but L+G\'s exact construction is unknown. The 0xD2 packets in <code>gridstream-capture.log</code> all show <code>[CRC:BAD]</code>; that\'s expected, not corruption.'
+  },
+  // 0xD2 plaintext timestamp — distinct from the validated 0xD5/len-71 network clock
+  d2_ts: {
+    layer: 'session',
+    name: 'Unix timestamp (plaintext AAD)',
+    notes: '4-byte BE Unix timestamp carried in the clear inside the CI=0x52 frame. Unlike the 0xD5/len-71 network-reference timestamp, this one is NOT independently validated as a 1 Hz monotonic clock &mdash; here it functions as <strong>authenticated additional data (AAD)</strong> and most likely feeds the cipher nonce-counter. Treat it as a plaintext binding field, not a verified clock source.'
+  },
+  d2_short_body: {
+    layer: 'value',
+    name: 'Short body bytes',
+    notes: 'The 2&ndash;3 trailing body bytes of the shortest 0xD2 sub-variants (CI=0x53 9-byte keepalive; CI=0x22 10-byte short directed control). Too short to carry COSEM addressing &mdash; likely a compact mesh keepalive / ACK / short command code. Plaintext but not structurally decoded. No separate CRC or MAC is delimited at this length.'
+  },
+  d2_obis_value: {
+    layer: 'value',
+    name: '2-byte value / SN',
+    notes: 'Trailing 2 bytes of the 0xD2/len-16 plaintext-COSEM frame, immediately after the 5-byte L+G OBIS prefix. The protocol-doc inventory labels this a 2-byte value; structurally it sits where 0xD5/len-28 carries its DLMS SN, but this 0xD2 variant is 2 bytes shorter (no DIF/VIF follow). Because all 0xD2 frames fail the standard CRC, these 2 bytes could alternatively be a truncated MAC rather than a payload value &mdash; unresolved.'
+  },
+  // NEW short-directed 0xD5 formats (2026-05-30 full-corpus audit)
+  lg_tag_070003: {
+    layer: 'cosem',
+    name: 'L+G tag 07 00 03',
+    notes: '<code>07 00 03</code> &mdash; a 3-byte L+G tag seen in the NEW (2026-05-30) short-directed 0xD5 formats len-20 and len-25. In len-20 it follows the session bytes directly (no <code>09 03</code>); in len-25 it follows the <code>09 03</code> COSEM marker. Purpose not yet decoded &mdash; possibly an object/attribute reference or a short command selector. Only a handful of these packets exist in the corpus (2 + 3).'
+  },
+  // NEW 0xD5/len-125/CI-0x81 bulk-transfer frame (1 packet; longest ever seen)
+  bulk_header: {
+    layer: 'value',
+    name: 'Bulk-transfer header',
+    notes: '<code>D6 00 00 00 00 00 1F FE FE FE 7D FE</code> &mdash; fixed-shaped 12-byte header opening the unique 0xD5/len-125/CI-0x81 bulk frame. Structure not decoded; the <code>FE</code> run resembles the sentinel bytes in the len-71 routing trailer.'
+  },
+  bulk_lan_echo: {
+    layer: 'addr',
+    name: 'Echoed dst+src LAN pair',
+    notes: 'The destination and source LAN IDs from the header, echoed again inside the body (<code>dst</code> + <code>0x80</code> + <code>src</code>). Purpose unclear &mdash; possibly a routing/relay record or a transfer descriptor naming the endpoints of the bulk exchange.'
+  },
+  bulk_marker: {
+    layer: 'value',
+    name: 'Bulk-transfer marker',
+    notes: '<code>01 2A 28 00 90 07 B0 80 E0 00 11 2D</code> &mdash; 12-byte marker preceding the high-entropy tail in the len-125 bulk frame. Not decoded.'
+  },
+  bulk_payload: {
+    layer: 'value',
+    name: 'Bulk payload (compressed?)',
+    notes: '~81-byte high-entropy tail of the len-125/CI-0x81 frame. Measures <strong>6.17 bits/byte</strong> &mdash; below the ~8.0 of pure AES output, so this leans toward a <strong>bulk / compressed multi-register transfer</strong> rather than straight ciphertext. It PASSES the standard <code>0x142A</code> CRC (unlike the 0xD2 encrypted family, which never does), so the frame is not AEAD-protected the way 0xD2/CI=0x52 is. No plaintext DLMS markers found.'
+  },
+};
+
+// Helper: build a field referencing a canonical definition, with optional override
+function f(off, len, ref, override) {
+  const def = FIELD_DEFS[ref];
+  if (!def) throw new Error('Unknown FIELD_DEFS key: ' + ref);
+  return Object.assign({ off, len }, def, override || {});
+}
+
+const PACKETS = [
+  {
+    id: 'D5_17',
+    title: '0xD5 / len-17',
+    subtitle: 'Short mesh control',
+    sidebarMeta: '23B · 31.6% of corpus',
+    summary: 'The most common packet (31.6%). Pure L+G mesh control with no DLMS/COSEM content. Likely a HELLO / keepalive / route-update. Carries dst + src addresses but no application payload.',
+    hex: '80 FF 2A D5 00 11 22 90 00 00 2E 90 00 00 FD C8 01 0A DD 13 90 DB FE',
+    fields: [
+      f(0, 3, 'sync'),
+      f(3, 1, 'type_d5'),
+      f(4, 1, 'reserved_b4'),
+      f(5, 1, 'length'),
+      f(6, 1, 'ci'),
+      f(7, 4, 'dst'),
+      f(11, 4, 'src'),
+      f(15, 6, 'mesh_control_payload'),
+      f(21, 2, 'crc16'),
+    ]
+  },
+  {
+    id: 'D5_29',
+    title: '0xD5 / len-29',
+    subtitle: 'Rare mesh control',
+    sidebarMeta: '35B · 0.04% of corpus · 26 pkts',
+    summary: 'Rare mesh-control variant (26 packets, CI uniformly <code>0x29</code>). Carries dst + src addresses then an 18-byte payload with no DLMS/COSEM markers &mdash; structure undecoded. Same "no COSEM" family as len-17, just longer.',
+    hex: '80 FF 2A D5 00 1D 29 90 00 00 D5 90 00 00 FD 5D C0 08 00 74 50 05 0C 01 2B 83 4F 81 5E 16 EA 24 00 51 AB',
+    fields: [
+      f(0, 3, 'sync'),
+      f(3, 1, 'type_d5'),
+      f(4, 1, 'reserved_b4'),
+      f(5, 1, 'length'),
+      f(6, 1, 'ci'),
+      f(7, 4, 'dst'),
+      f(11, 4, 'src'),
+      f(15, 18, 'mesh_control_payload'),
+      f(33, 2, 'crc16'),
+    ]
+  },
+  {
+    id: 'D5_22',
+    title: '0xD5 / len-22',
+    subtitle: 'Directed data (Association_SN)',
+    sidebarMeta: '28B · 28.4% of corpus',
+    summary: 'Directed COSEM data carrying a single attribute report. Class_id at byte 18 identifies the COSEM object (Association_SN is most common at 68% &mdash; meters announcing entries from their SN&rarr;OBIS dictionary). Uses the L+G calling convention `09 03` followed by SN + DIF + VIF.',
+    hex: '80 FF 2A D5 00 16 29 90 00 00 D5 90 00 00 FD 07 C0 01 00 0C 09 03 09 25 24 20 63 F3',
+    fields: [
+      f(0, 3, 'sync'),
+      f(3, 1, 'type_d5'),
+      f(4, 1, 'reserved_b4'),
+      f(5, 1, 'length'),
+      f(6, 1, 'ci'),
+      f(7, 4, 'dst'),
+      f(11, 4, 'src'),
+      f(15, 2, 'session_seq'),
+      f(17, 1, 'separator_00', { name: 'Constant 0x01', notes: '<code>0x01</code> in ~99% of packets at this offset. Purpose unknown &mdash; likely a fixed marker delimiting the session header from the COSEM payload.' }),
+      f(18, 2, 'cosem_class_id'),
+      f(20, 1, 'lg_marker_09'),
+      f(21, 1, 'lg_marker_03'),
+      f(22, 2, 'dlms_sn'),
+      f(24, 1, 'wmbus_dif'),
+      f(25, 1, 'wmbus_vif'),
+      f(26, 2, 'crc16'),
+    ]
+  },
+  {
+    id: 'D5_23',
+    title: '0xD5 / len-23',
+    subtitle: 'Directed data variant',
+    sidebarMeta: '29B · 10.5% of corpus',
+    summary: 'Variant of len-22 with one extra body byte. The extra byte at offset 22 is a sub-selector (`0x04` for Association_SN). Otherwise identical structure: class_id + L+G marker + SN + DIF + VIF.',
+    hex: '80 FF 2A D5 00 17 29 90 00 01 7B 90 00 00 FD 38 88 01 00 0C 09 03 04 09 DA 11 00 4D 1B',
+    fields: [
+      f(0, 3, 'sync'),
+      f(3, 1, 'type_d5'),
+      f(4, 1, 'reserved_b4'),
+      f(5, 1, 'length'),
+      f(6, 1, 'ci'),
+      f(7, 4, 'dst'),
+      f(11, 4, 'src'),
+      f(15, 2, 'session_seq'),
+      f(17, 1, 'separator_00', { name: 'Constant 0x01', notes: '<code>0x01</code> in ~99% of packets at this offset.' }),
+      f(18, 2, 'cosem_class_id'),
+      f(20, 1, 'lg_marker_09'),
+      f(21, 1, 'lg_marker_03'),
+      f(22, 1, 'sub_selector'),
+      f(23, 2, 'dlms_sn'),
+      f(25, 1, 'wmbus_dif'),
+      f(26, 1, 'wmbus_vif'),
+      f(27, 2, 'crc16'),
+    ]
+  },
+  {
+    id: 'D5_28',
+    title: '0xD5 / len-28',
+    subtitle: 'Peer-to-peer w/ OBIS prefix',
+    sidebarMeta: '34B · 0.6% of corpus · OUR meter',
+    summary: 'Peer-to-peer directed query, sent FROM our meter (90000000) to a neighbor. Includes the 5-byte L+G OBIS prefix `20 30 2D 84 80` (also seen in 0xD5/len-71 status push). CI is uniformly `0x22` for this length.',
+    hex: '80 FF 2A D5 00 1C 22 90 00 01 35 90 00 00 00 34 01 01 00 0F 09 03 05 20 30 2D 84 80 12 3D 11 60 78 71',
+    fields: [
+      f(0, 3, 'sync'),
+      f(3, 1, 'type_d5'),
+      f(4, 1, 'reserved_b4'),
+      f(5, 1, 'length'),
+      f(6, 1, 'ci'),
+      f(7, 4, 'dst'),
+      f(11, 4, 'src'),
+      f(15, 3, 'session_seq'),
+      f(18, 2, 'cosem_class_id'),
+      f(20, 1, 'lg_marker_09'),
+      f(21, 1, 'lg_marker_03'),
+      f(22, 1, 'sub_selector'),
+      f(23, 5, 'lg_obis_prefix'),
+      f(28, 2, 'dlms_sn'),
+      f(30, 1, 'wmbus_dif'),
+      f(31, 1, 'wmbus_vif'),
+      f(32, 2, 'crc16'),
+    ]
+  },
+  {
+    id: 'D5_20',
+    title: '0xD5 / len-20',
+    subtitle: 'Short directed (NEW)',
+    sidebarMeta: '26B · <0.01% · 2 pkts · NEW 2026-05-30',
+    summary: 'New short-directed format found in the 2026-05-30 full-corpus audit (2 packets, CI=<code>0x22</code>). Dst + src LAN, two session bytes, then the L+G <code>07 00 03</code> tag and 4 opaque payload bytes. No <code>09 03</code> COSEM marker. Passes the standard <code>0x142A</code> CRC, so it is a genuine format, not corruption.',
+    hex: '80 FF 2A D5 00 14 22 90 00 00 57 90 00 00 C7 51 0F 07 00 03 16 A4 1B 10 9E 1F',
+    fields: [
+      f(0, 3, 'sync'),
+      f(3, 1, 'type_d5'),
+      f(4, 1, 'reserved_b4'),
+      f(5, 1, 'length'),
+      f(6, 1, 'ci'),
+      f(7, 4, 'dst'),
+      f(11, 4, 'src'),
+      f(15, 2, 'session_seq'),
+      f(17, 3, 'lg_tag_070003'),
+      f(20, 4, 'mesh_control_payload'),
+      f(24, 2, 'crc16'),
+    ]
+  },
+  {
+    id: 'D5_25',
+    title: '0xD5 / len-25',
+    subtitle: 'Short directed + COSEM (NEW)',
+    sidebarMeta: '31B · <0.01% · 3 pkts · NEW 2026-05-30',
+    summary: 'New short-directed format (3 packets, CI=<code>0x22</code>) combining the <code>07 00 03</code> tag with a DLMS <code>09 03</code> COSEM marker. After the class_id and marker comes the tag, then an SN + DIF + VIF shaped tail. One variant uses <code>09 02</code> instead of <code>09 03</code>. Passes the standard CRC.',
+    hex: '80 FF 2A D5 00 19 22 90 00 01 A3 90 00 00 BE 93 0F 01 00 0D 09 03 07 00 03 12 14 1A 70 70 24',
+    fields: [
+      f(0, 3, 'sync'),
+      f(3, 1, 'type_d5'),
+      f(4, 1, 'reserved_b4'),
+      f(5, 1, 'length'),
+      f(6, 1, 'ci'),
+      f(7, 4, 'dst'),
+      f(11, 4, 'src'),
+      f(15, 2, 'session_seq'),
+      f(17, 1, 'separator_00', { name: 'Constant 0x01', notes: '<code>0x01</code> marker delimiting the session header from the COSEM payload (same position as in len-22/23).' }),
+      f(18, 2, 'cosem_class_id'),
+      f(20, 1, 'lg_marker_09'),
+      f(21, 1, 'lg_marker_03'),
+      f(22, 3, 'lg_tag_070003'),
+      f(25, 2, 'dlms_sn'),
+      f(27, 1, 'wmbus_dif'),
+      f(28, 1, 'wmbus_vif'),
+      f(29, 2, 'crc16'),
+    ]
+  },
+  {
+    id: 'D5_71',
+    title: '0xD5 / len-71 (CI=0x51)',
+    subtitle: 'Status push',
+    sidebarMeta: '77B · 7.0% of corpus',
+    summary: 'The richest packet type. Long L+G session header (with Unix timestamp, uptime, routing trailer), 11 zero-bytes of padding, then the COSEM payload at byte 60+. The CI=0x51 variant carries metadata about pushed attributes; the value itself is not in plaintext.',
+    hex: '80 FF 2A D5 00 47 51 90 00 00 F3 90 00 00 FD 32 6A 16 86 5E 00 01 77 78 01 16 30 D0 A4 0B 01 01 FE 90 00 00 FD 00 90 00 00 FD 00 01 03 25 00 00 00 00 00 00 00 00 00 00 00 01 D4 C0 00 0C 09 03 00 C4 20 30 2D 84 80 0C 7E 12 00 2E 1E',
+    fields: [
+      f(0, 3, 'sync'),
+      f(3, 1, 'type_d5'),
+      f(4, 1, 'reserved_b4'),
+      f(5, 1, 'length'),
+      f(6, 1, 'ci'),
+      f(7, 4, 'dst'),
+      f(11, 4, 'src'),
+      f(15, 1, 'session_byte15'),
+      f(16, 4, 'unix_time'),
+      f(20, 1, 'axdr_null'),
+      f(21, 1, 'axdr_array'),
+      f(22, 2, 'sn_value_digest'),
+      f(24, 4, 'uptime'),
+      f(28, 2, 'lg_const_a40b'),
+      f(30, 2, 'routing_trailer_start'),
+      f(32, 1, 'sentinel_fe'),
+      f(33, 4, 'src_repeat'),
+      f(37, 1, 'separator_00'),
+      f(38, 4, 'src_repeat'),
+      f(42, 1, 'separator_00'),
+      f(43, 3, 'routing_trailer_end'),
+      f(46, 11, 'zero_padding'),
+      f(57, 3, 'payload_transition'),
+      f(60, 2, 'cosem_class_id'),
+      f(62, 1, 'lg_marker_09'),
+      f(63, 1, 'lg_marker_03'),
+      f(64, 1, 'separator_00'),
+      f(65, 1, 'attribute_selector'),
+      f(66, 5, 'lg_obis_prefix'),
+      f(71, 2, 'dlms_sn'),
+      f(73, 1, 'wmbus_dif'),
+      f(74, 1, 'wmbus_vif'),
+      f(75, 2, 'crc16'),
+    ]
+  },
+  {
+    id: 'D5_71_C55',
+    title: '0xD5 / len-71 (CI=0x55)',
+    subtitle: 'Extended status push (rare)',
+    sidebarMeta: '77B · 286 pkts (0.39%) · CI=0x55',
+    summary: 'Irregular, event-driven sibling of the CI=0x51 status push (286 packets, 0.39%). Carries large data types (uint32, float32, uint64, selection-for-readout) and uses DIFFERENT SNs than CI=0x51 (only 1/18 overlap); some instances use <code>09 04</code> rather than <code>09 03</code>. Bytes 57-59 carry uint24 values that were once the leading candidate for a plaintext kWh register &mdash; but <strong>Q1 (2026-05-30) falsified that</strong>: hour-binned against our own meter\'s PSE Green Button kWh, the value field shows no correlation (r &asymp; 0.107) and its range (3..6006) is far too small for a cumulative register. No plaintext billing value is recoverable. <strong>Q2 (2026-05-30)</strong> also showed it is not periodic: every 0x55 source also emits 0x51, but no 0x55 lands within 30 s of a same-source 0x51 (median gap 780 s) &mdash; an occasional "something changed" report, not a clock- or overflow-driven snapshot. <em>Representative frame from the committed, anonymized corpus (AirSpy R2 capture; neighbor LAN IDs anonymized).</em>',
+    hex: '80 FF 2A D5 00 47 55 90 00 01 1D 90 00 00 FD 72 6A 17 91 30 00 01 79 44 01 17 3B A2 A4 0B 01 01 FE 90 00 00 FD 00 90 00 00 FD 00 01 03 25 00 00 00 00 00 00 00 00 00 00 00 03 72 D0 00 0C 09 03 00 C5 20 30 2D 84 80 04 5C 14 70 79 ED',
+    fields: [
+      f(0, 3, 'sync'),
+      f(3, 1, 'type_d5'),
+      f(4, 1, 'reserved_b4'),
+      f(5, 1, 'length'),
+      f(6, 1, 'ci'),
+      f(7, 4, 'dst'),
+      f(11, 4, 'src'),
+      f(15, 1, 'session_byte15'),
+      f(16, 4, 'unix_time'),
+      f(20, 1, 'axdr_null'),
+      f(21, 1, 'axdr_array'),
+      f(22, 2, 'sn_value_digest'),
+      f(24, 4, 'uptime'),
+      f(28, 2, 'lg_const_a40b'),
+      f(30, 2, 'routing_trailer_start'),
+      f(32, 1, 'sentinel_fe'),
+      f(33, 4, 'src_repeat'),
+      f(37, 1, 'separator_00'),
+      f(38, 4, 'src_repeat'),
+      f(42, 1, 'separator_00'),
+      f(43, 3, 'routing_trailer_end'),
+      f(46, 11, 'zero_padding'),
+      f(57, 3, 'payload_transition'),
+      f(60, 2, 'cosem_class_id'),
+      f(62, 1, 'lg_marker_09'),
+      f(63, 1, 'lg_marker_03'),
+      f(64, 1, 'separator_00'),
+      f(65, 1, 'attribute_selector'),
+      f(66, 5, 'lg_obis_prefix'),
+      f(71, 2, 'dlms_sn'),
+      f(73, 1, 'wmbus_dif'),
+      f(74, 1, 'wmbus_vif'),
+      f(75, 2, 'crc16'),
+    ]
+  },
+  {
+    id: 'D5_125',
+    title: '0xD5 / len-125 (CI=0x81)',
+    subtitle: 'Bulk transfer (NEW, longest ever)',
+    sidebarMeta: '131B · <0.01% · 1 pkt · NEW 2026-05-30',
+    summary: 'The longest packet ever captured (1 packet; prior max was 71B). CI=<code>0x81</code> (high bit set) is otherwise unseen. After the header: dst + src LAN, a 12-byte bulk header, the dst+src LAN pair ECHOED again, a 12-byte marker, then ~81 bytes of high-entropy data. The tail measures 6.17 bits/byte (below pure-AES ~8.0), so it leans bulk/compressed multi-register transfer rather than ciphertext &mdash; and unlike 0xD2, it PASSES the standard CRC. No plaintext DLMS markers.',
+    hex: '80 FF 2A D5 00 7D 81 90 00 01 51 90 00 00 68 D6 00 00 00 00 00 1F FE FE FE 7D FE 90 00 01 51 80 90 00 00 68 01 2A 28 00 90 07 B0 80 E0 00 11 2D 95 6F 7D 2B C5 73 8E 18 8C 04 DD 54 A1 48 09 F3 C0 95 83 8D D4 56 11 FE 72 B7 3B 44 4E 46 12 05 3F A3 F6 5A 83 9C C3 48 75 13 D9 A2 4B F1 41 B0 8D 21 7F 35 13 26 4F D9 67 6B 36 5E 57 D6 79 51 77 A5 70 3F 0A 22 7A A1 4B DA 90 31 8E 17 34 17 90 73 4A',
+    fields: [
+      f(0, 3, 'sync'),
+      f(3, 1, 'type_d5'),
+      f(4, 1, 'reserved_b4'),
+      f(5, 1, 'length'),
+      f(6, 1, 'ci'),
+      f(7, 4, 'dst'),
+      f(11, 4, 'src'),
+      f(15, 12, 'bulk_header'),
+      f(27, 9, 'bulk_lan_echo'),
+      f(36, 12, 'bulk_marker'),
+      f(48, 81, 'bulk_payload'),
+      f(129, 2, 'crc16'),
+    ]
+  },
+  {
+    id: 'BC55_35',
+    title: '0x55 / len-35',
+    subtitle: 'Broadcast announcement',
+    sidebarMeta: '41B · 19.5% of corpus',
+    summary: 'Network-wide broadcast (destination = `FF×6+FE`) carrying a COSEM SN announcement. Broadcasts announce object existence but DO NOT include the value itself &mdash; that\'s why there\'s a `7E 70` trailer instead of DIF/VIF + value. The receiver would request the actual value via a separate directed exchange.',
+    hex: '80 FF 2A 55 00 23 30 FF FF FF FF FF FF FE 90 00 00 FD 00 3C 01 16 3C BA A4 0B 90 00 00 FD 01 00 0C 09 03 04 E7 7E 70 94 94',
+    fields: [
+      f(0, 3, 'sync'),
+      f(3, 1, 'type_55'),
+      f(4, 1, 'reserved_b4'),
+      f(5, 1, 'length'),
+      f(6, 1, 'ci'),
+      f(7, 7, 'bcast_dst'),
+      f(14, 4, 'bcast_src'),
+      f(18, 1, 'bcast_const_00'),
+      f(19, 5, 'bcast_session'),
+      f(24, 2, 'lg_const_a40b'),
+      f(26, 4, 'bcast_src_repeat'),
+      f(30, 1, 'bcast_const_01'),
+      f(31, 2, 'cosem_class_id'),
+      f(33, 1, 'lg_marker_09'),
+      f(34, 1, 'lg_marker_03'),
+      f(35, 2, 'dlms_sn'),
+      f(37, 2, 'bcast_trailer'),
+      f(39, 2, 'crc16'),
+    ]
+  },
+  {
+    id: 'D2_18',
+    title: '0xD2 / len-18 (CI=0x52 encrypted)',
+    subtitle: 'Encrypted directed mesh (one of 5 0xD2 sub-variants)',
+    sidebarMeta: '23B · 5-byte header · CI=0x52 · encrypted',
+    summary: '<strong>This is the encrypted sub-variant of 0xD2.</strong> 0xD2 packets come in at least 5 sub-variants differentiated by CI byte: CI=<code>0x53</code> (9B, mesh ping), CI=<code>0x22</code> (10B/15B/21B, <em>plaintext</em> COSEM-style), and CI=<code>0x52</code> (23B, encrypted, this one). The CI byte is the encryption discriminator &mdash; <code>0x22</code> means plaintext, <code>0x52</code> means encrypted. This 23B variant has a truncated 2-byte cryptographic auth tag in place of a CRC, brute-force tested against all 65,536 CRC-16 init values with no match. The plaintext header (sync &rarr; type &rarr; length &rarr; CI &rarr; seq &rarr; mostly-constant bytes &rarr; timestamp &rarr; mostly-constant bytes) functions as AAD; the 6 high-entropy bytes that follow are the ciphertext. Per L+G Security Architecture &sect;6.2, this uses the meter\'s <strong>individual AES-256 key</strong> (vaulted in the HES Key Manager) &mdash; almost certainly AES-CCM with 2-byte truncated MAC.',
+    hex: '80 FF 2A D2 12 52 EE 01 02 6A 17 1D 31 00 01 38 3A 00 04 97 C8 A7 7D',
+    fields: [
+      f(0, 3, 'sync'),
+      f(3, 1, 'type_d2'),
+      f(4, 1, 'length'),
+      f(5, 1, 'ci'),
+      f(6, 1, 'd2_seq'),
+      f(7, 2, 'd2_const_0102'),
+      f(9, 4, 'd2_ts'),
+      f(13, 2, 'd2_const_0001'),
+      f(15, 6, 'd2_ciphertext'),
+      f(21, 2, 'd2_auth_tag'),
+    ]
+  },
+  {
+    id: 'D2_10',
+    title: '0xD2 / len-10 (CI=0x22 plaintext)',
+    subtitle: 'Plaintext directed mesh, COSEM-style',
+    sidebarMeta: '15B · 5-byte header · CI=0x22 · plaintext',
+    summary: 'Plaintext sub-variant of 0xD2 with CI=<code>0x22</code>. This DEMONSTRATES that the 0xD2 family is NOT exclusively encrypted &mdash; CI=<code>0x22</code> packets carry visible L+G COSEM-style payloads exactly like 0xD5 directed mesh, just on the 5-byte-header framing. Structure after the CI byte: seq, 2 constant bytes (<code>01 01</code>), class_id (here <code>0x000D</code>), L+G marker <code>09 03</code>, and SN. These packets fail the standard PSE CRC validator because the validator is currently scoped to 6-byte-header families; the 5-byte-header 0xD2/CI=<code>0x22</code> packets likely use a different CRC body region that the validator doesn\'t try (open task to re-scope the brute-force).',
+    hex: '80 FF 2A D2 0A 22 6A 01 01 00 0D 09 03 61 67',
+    fields: [
+      f(0, 3, 'sync'),
+      f(3, 1, 'type_d2'),
+      f(4, 1, 'length'),
+      f(5, 1, 'ci'),
+      f(6, 1, 'd2_seq'),
+      { off: 7, len: 2, layer: 'const', name: 'Mostly 0x01 0x01', notes: 'Constant-shaped 2-byte field in the CI=0x22 plaintext variants. Role unconfirmed.' },
+      f(9, 2, 'cosem_class_id'),
+      f(11, 1, 'lg_marker_09'),
+      f(12, 1, 'lg_marker_03'),
+      f(13, 2, 'dlms_sn'),
+    ]
+  },
+  {
+    id: 'D2_4',
+    title: '0xD2 / len-4 (CI=0x53)',
+    subtitle: 'Mesh keepalive (plaintext, shortest)',
+    sidebarMeta: '9B · 5-byte header · CI=0x53 · 3,207 frames',
+    summary: 'The shortest 0xD2 sub-variant and one of the most common (3,207 frames, CI=<code>0x53</code> 94%). Sync + type + length + CI + sequence + 2 body bytes &mdash; too short for COSEM addressing. Almost certainly a mesh keepalive / ping. Plaintext. Like all 0xD2 it shows <code>[CRC:BAD]</code>, but at this length there is no separate CRC/MAC field anyway.',
+    hex: '80 FF 2A D2 04 53 BE 06 FC',
+    fields: [
+      f(0, 3, 'sync'),
+      f(3, 1, 'type_d2'),
+      f(4, 1, 'length'),
+      f(5, 1, 'ci'),
+      f(6, 1, 'd2_seq'),
+      f(7, 2, 'd2_short_body'),
+    ]
+  },
+  {
+    id: 'D2_5',
+    title: '0xD2 / len-5 (CI=0x22)',
+    subtitle: 'Short directed control (plaintext)',
+    sidebarMeta: '10B · 5-byte header · CI=0x22 · 1,774 frames',
+    summary: 'Short directed-control 0xD2 sub-variant (1,774 frames, CI=<code>0x22</code> 100%). Sequence byte plus 3 opaque body bytes &mdash; still too short for COSEM. Plaintext; not structurally decoded.',
+    hex: '80 FF 2A D2 05 22 C6 01 E9 24',
+    fields: [
+      f(0, 3, 'sync'),
+      f(3, 1, 'type_d2'),
+      f(4, 1, 'length'),
+      f(5, 1, 'ci'),
+      f(6, 1, 'd2_seq'),
+      f(7, 3, 'd2_short_body'),
+    ]
+  },
+  {
+    id: 'D2_16',
+    title: '0xD2 / len-16 (CI=0x22)',
+    subtitle: 'Plaintext COSEM w/ OBIS prefix',
+    sidebarMeta: '21B · 5-byte header · CI=0x22 · 302 frames',
+    summary: 'The richest plaintext 0xD2 sub-variant (302 frames, CI=<code>0x22</code>). Mirrors 0xD5/len-28 on the 5-byte-header framing: class_id + <code>09 03</code> marker + <code>05</code> sub-selector + the 5-byte L+G OBIS prefix <code>20 30 2D 84 80</code> + a trailing 2-byte value. Demonstrates the 0xD2 family is mostly plaintext &mdash; only CI=<code>0x52</code> is encrypted.',
+    hex: '80 FF 2A D2 10 22 86 01 01 00 0C 09 03 05 20 30 2D 84 80 34 9C',
+    fields: [
+      f(0, 3, 'sync'),
+      f(3, 1, 'type_d2'),
+      f(4, 1, 'length'),
+      f(5, 1, 'ci'),
+      f(6, 1, 'd2_seq'),
+      { off: 7, len: 2, layer: 'const', name: 'Mostly 0x01 0x01', notes: 'Constant-shaped 2-byte field (<code>01 01</code>), same as in 0xD5/len-28. Role unconfirmed.' },
+      f(9, 2, 'cosem_class_id'),
+      f(11, 1, 'lg_marker_09'),
+      f(12, 1, 'lg_marker_03'),
+      f(13, 1, 'sub_selector'),
+      f(14, 5, 'lg_obis_prefix'),
+      f(19, 2, 'd2_obis_value'),
+    ]
+  },
+  {
+    id: 'A5_18',
+    title: '0xA5 / len-18',
+    subtitle: 'Scheduled mesh beacon',
+    sidebarMeta: '23B · 2.1% of corpus · 5-byte header',
+    summary: 'Scheduled mesh beacon. Different header structure from 0xD5/0x55: 1-byte length at offset 4 (no separate flags byte), body starts at offset 5. Likely a periodic time-sync or slot-counter beacon. Byte 14 acts as a network-wide slot counter decrementing ~1 per 30 minutes.',
+    hex: '80 FF 2A A5 12 3C 90 00 00 FD F1 1B 2D 53 31 2A 87 6A 16 F3 0E 8E 20',
+    fields: [
+      f(0, 3, 'sync'),
+      f(3, 1, 'type_a5'),
+      f(4, 1, 'length'),
+      f(5, 1, 'ci'),
+      f(6, 4, 'src_a5'),
+      f(10, 11, 'beacon_payload'),
+      f(21, 2, 'crc16'),
+    ]
+  },
+];
+
+function renderPacketList() {
+  const list = document.getElementById('packet-list');
+  const customItem = `
+    <li>
+      <button class="custom" data-id="__custom__">
+        <span class="pkt-title">📋 Paste your own packet</span>
+        <span class="pkt-meta">Bring hex from a capture log</span>
+      </button>
+    </li>
+    <li><hr class="divider"></li>
+  `;
+  list.innerHTML = customItem + PACKETS.map(p => `
+    <li>
+      <button data-id="${p.id}">
+        <span class="pkt-title">${p.title}</span>
+        <span class="pkt-meta">${p.subtitle} · ${p.sidebarMeta}</span>
+      </button>
+    </li>
+  `).join('');
+
+  list.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      list.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      if (btn.dataset.id === '__custom__') {
+        showCustomInputView();
+      } else {
+        const pkt = PACKETS.find(p => p.id === btn.dataset.id);
+        renderPacket(pkt);
+      }
+    });
+  });
+}
+
+// =====================================================================
+// "Bring your own packet" support
+// =====================================================================
+
+function parseUserHex(input) {
+  // Tolerant parser: strips 0x prefixes, log-line prefixes, ANSI escapes,
+  // any non-hex characters. If the user pastes a whole log line
+  // like '[CRC: OK] 80FF2AD5... Baudrate: 19200', we extract the hex.
+  let cleaned = input
+    .replace(/\x1b\[[0-9;]*m/g, '')   // strip ANSI escape sequences
+    .replace(/\[[^\]]*\]/g, '')       // strip [CRC: OK], etc.
+    .replace(/\b(?:Baudrate|SNR|Pwr|[Cc][Rr][Cc]):.*/g, '') // strip metadata
+    .replace(/\b\d{2}:\d{2}:\d{2}\b/g, ''); // strip timestamps
+  // Heuristic: grab the longest run of hex digits and whitespace
+  const hexRuns = cleaned.match(/[0-9a-fA-F\s]+/g) || [];
+  let hexBlock = hexRuns.sort((a, b) => b.length - a.length)[0] || '';
+  hexBlock = hexBlock.replace(/0x/gi, '').replace(/[^0-9a-fA-F]/g, '');
+  if (hexBlock.length === 0) throw new Error('No hex bytes found in input.');
+  if (hexBlock.length % 2 !== 0) throw new Error('Odd number of hex characters — incomplete byte.');
+  return hexBlock.match(/.{2}/g).map(h => h.toUpperCase());
+}
+
+function findMatchingCluster(bytes) {
+  const type = parseInt(bytes[3], 16);
+  const isShortHeader = (type === 0xA5 || type === 0xD2);
+  const lenOff = isShortHeader ? 4 : 5;   // length byte position
+  const ciOff = isShortHeader ? 5 : 6;    // CI byte position
+
+  // Candidates match on type byte, length byte, and total packet length.
+  const candidates = PACKETS.filter(p => {
+    const ex = parseHex(p.hex);
+    if (ex.length !== bytes.length) return false;
+    if (parseInt(ex[3], 16) !== type) return false;
+    return parseInt(ex[lenOff], 16) === parseInt(bytes[lenOff], 16);
+  });
+  if (candidates.length <= 1) return candidates[0];
+
+  // Several documented formats share this (type, length) — the CI byte is the
+  // real sub-discriminator (e.g. 0xD5/len-71 CI 0x51 vs 0x55). Match on it;
+  // fall back to the first candidate if no CI matches.
+  if (bytes.length > ciOff) {
+    const byCi = candidates.find(p =>
+      parseInt(parseHex(p.hex)[ciOff], 16) === parseInt(bytes[ciOff], 16));
+    if (byCi) return byCi;
+  }
+  return candidates[0];
+}
+
+function typeLabel(type) {
+  return {
+    0x55: 'broadcast frame',
+    0xA5: 'scheduled / beacon frame',
+    0xD5: 'directed mesh frame',
+    0xD2: 'directed mesh frame (mostly plaintext; only CI=0x52 encrypted)',
+  }[type] || 'unknown packet type';
+}
+
+function buildGenericFields(bytes) {
+  // Best-effort decode for an unrecognized packet shape — uses the same
+  // canonical FIELD_DEFS as documented clusters so descriptions stay consistent.
+  const type = parseInt(bytes[3], 16);
+  const isShortHeader = (type === 0xA5 || type === 0xD2);
+  const typeRef = ({0x55:'type_55', 0xA5:'type_a5', 0xD5:'type_d5', 0xD2:'type_d2'})[type];
+
+  const fields = [
+    f(0, 3, 'sync'),
+    f(3, 1, typeRef),
+  ];
+  if (isShortHeader) {
+    fields.push(f(4, 1, 'length'));
+    if (bytes.length >= 6) fields.push(f(5, 1, 'ci'));
+    if (bytes.length >= 10) fields.push(f(6, 4, 'src_a5'));
+  } else {
+    fields.push(f(4, 1, 'reserved_b4'));
+    fields.push(f(5, 1, 'length'));
+    if (bytes.length >= 7) fields.push(f(6, 1, 'ci'));
+    if (bytes.length >= 14) {
+      const isBcast = (parseInt(bytes[7], 16) === 0xFF);
+      if (isBcast) {
+        fields.push(f(7, 7, 'bcast_dst'));
+        if (bytes.length >= 18) fields.push(f(14, 4, 'bcast_src'));
+      } else {
+        fields.push(f(7, 4, 'dst'));
+        fields.push(f(11, 4, 'src'));
+      }
+    }
+  }
+  // Opaque payload between header/addresses and CRC
+  const payloadStart = isShortHeader ? 10 : (parseInt(bytes[7], 16) === 0xFF ? 18 : 15);
+  const crcStart = bytes.length - 2;
+  if (crcStart > payloadStart) {
+    fields.push(f(payloadStart, crcStart - payloadStart, 'generic_payload'));
+  }
+  if (bytes.length >= 2) {
+    fields.push(f(bytes.length - 2, 2, 'crc16'));
+  }
+  return fields;
+}
+
+function showCustomInputView() {
+  document.getElementById('packet-title').textContent = 'Bring your own packet';
+  document.getElementById('packet-summary').innerHTML =
+    'Paste hex bytes from a capture log line below — with or without spaces, ' +
+    'with or without surrounding log metadata. The analyzer will identify the packet ' +
+    'type and show the field breakdown matching one of the documented clusters, ' +
+    'or fall back to a universal header decode if the packet shape is new.';
+
+  document.getElementById('hex-display').innerHTML = '';
+  document.getElementById('legend').innerHTML = '';
+  document.getElementById('field-list').innerHTML = `
+    <div class="custom-input-area">
+      <h3>Paste hex bytes</h3>
+      <textarea id="custom-hex-input" rows="5"
+        placeholder="80 FF 2A D5 00 47 51 90 00 00 F3 90 00 00 FD ...
+or paste a full log line — '[CRC: OK]' prefix and 'Baudrate:' suffix will be stripped."></textarea>
+      <div class="controls">
+        <button id="custom-analyze-btn">Analyze</button>
+        <button id="custom-example-btn" class="secondary">Try example</button>
+        <span class="hint">Accepts spaces, 0x prefixes, log-line wrapping, ANSI color codes.</span>
+      </div>
+      <div id="custom-status"></div>
+    </div>
+  `;
+  document.getElementById('custom-analyze-btn').addEventListener('click', doCustomAnalyze);
+  document.getElementById('custom-example-btn').addEventListener('click', () => {
+    document.getElementById('custom-hex-input').value =
+      '[CRC: OK] 80FF2AD5004751900000F3900000FD326A16865E00017778011630D0A40B0101FE900000FD00900000FD00010325000000000000000000000001D4C0000C090300C420302D84800C7E12002E1E Baudrate: 19200 SNR: 28.5 03:24:57';
+  });
+
+  // Also analyze on Cmd/Ctrl+Enter inside the textarea
+  document.getElementById('custom-hex-input').addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      doCustomAnalyze();
+    }
+  });
+}
+
+function doCustomAnalyze() {
+  const input = document.getElementById('custom-hex-input').value;
+  const statusEl = document.getElementById('custom-status');
+  statusEl.className = '';
+  statusEl.textContent = '';
+
+  let bytes;
+  try {
+    bytes = parseUserHex(input);
+  } catch (e) {
+    statusEl.className = 'error';
+    statusEl.textContent = e.message;
+    return;
+  }
+
+  if (bytes.length < 6) {
+    statusEl.className = 'error';
+    statusEl.textContent = `Packet too short (${bytes.length} bytes). Need at least 6 for the header.`;
+    return;
+  }
+
+  const type = parseInt(bytes[3], 16);
+  if (![0x55, 0xA5, 0xD5, 0xD2].includes(type)) {
+    statusEl.className = 'error';
+    statusEl.textContent = `Unknown packet type 0x${bytes[3]} at byte 3 (expected 0x55/0xA5/0xD5/0xD2). Is this a GridStream packet?`;
+    return;
+  }
+
+  // Length sanity
+  const lenByte = parseInt(bytes[(type === 0xA5 || type === 0xD2) ? 4 : 5], 16);
+  const expectedTotal = lenByte + ((type === 0xA5 || type === 0xD2) ? 5 : 6);
+  let lengthWarning = '';
+  if (bytes.length !== expectedTotal) {
+    lengthWarning = ` (Note: packet claims length ${expectedTotal}, but you provided ${bytes.length} bytes.)`;
+  }
+
+  const match = findMatchingCluster(bytes);
+  const syntheticHex = bytes.join(' ');
+
+  if (match) {
+    const synthetic = {
+      ...match,
+      title: `Custom packet — matches ${match.title}`,
+      subtitle: match.subtitle,
+      hex: syntheticHex,
+      summary: `Your packet (<code>${bytes.length} bytes</code>, type <code>0x${bytes[3]}</code>) matches the documented structure of <strong>${match.title}</strong> (${match.subtitle}). Bytes shown below are YOUR packet; field notes are the cluster's general semantics. ${match.summary}`,
+    };
+    renderPacket(synthetic);
+    statusEl.className = 'ok';
+    statusEl.textContent = `✓ Matched cluster: ${match.title}${lengthWarning}`;
+  } else {
+    const synthetic = {
+      id: 'custom_generic',
+      title: 'Custom packet — generic decode',
+      subtitle: `${bytes.length}-byte ${typeLabel(type)}`,
+      hex: syntheticHex,
+      summary: `No matching cluster spec for type <code>0x${bytes[3]}</code> with total length ${bytes.length}. Showing the universal protocol header decode (sync, type, reserved/length, CI, addresses, CRC) and treating the rest as opaque payload. ${lengthWarning}`,
+      fields: buildGenericFields(bytes),
+    };
+    renderPacket(synthetic);
+    statusEl.className = 'ok';
+    statusEl.textContent = `Decoded as generic — no cluster spec matched the (type, length) combination.${lengthWarning}`;
+  }
+}
+
+function renderLegend(activeLayers) {
+  const legend = document.getElementById('legend');
+  legend.innerHTML = LAYER_ORDER
+    .filter(l => activeLayers.has(l))
+    .map(l => `
+      <div class="legend-item">
+        <span class="legend-swatch" style="background:${LAYER_COLORS[l]}"></span>
+        <span>${LAYER_NAMES[l]}</span>
+      </div>
+    `).join('');
+}
+
+function renderPacket(pkt) {
+  document.getElementById('packet-title').textContent =
+    `${pkt.title} — ${pkt.subtitle}`;
+  document.getElementById('packet-summary').innerHTML = pkt.summary;
+
+  const bytes = parseHex(pkt.hex);
+  const offsetToField = {};
+  pkt.fields.forEach((f, fIdx) => {
+    for (let i = 0; i < f.len; i++) {
+      offsetToField[f.off + i] = { fieldIdx: fIdx, field: f };
+    }
+  });
+
+  const hexHTML = bytes.map((b, i) => {
+    const info = offsetToField[i];
+    const layer = info ? info.field.layer : 'const';
+    const color = LAYER_COLORS[layer];
+    return `<span class="byte" data-field-idx="${info ? info.fieldIdx : ''}"
+                  style="background:${color}25; border-bottom-color:${color};">
+              ${b}<span class="off">${i}</span>
+            </span>`;
+  }).join('');
+  document.getElementById('hex-display').innerHTML = hexHTML;
+
+  const activeLayers = new Set(pkt.fields.map(f => f.layer));
+  renderLegend(activeLayers);
+
+  const fieldsByLayer = {};
+  pkt.fields.forEach((f, idx) => {
+    if (!fieldsByLayer[f.layer]) fieldsByLayer[f.layer] = [];
+    fieldsByLayer[f.layer].push({ ...f, _idx: idx });
+  });
+
+  const list = document.getElementById('field-list');
+  list.innerHTML = LAYER_ORDER.filter(l => fieldsByLayer[l]).map(layer => `
+    <div class="layer-group" style="border-left-color:${LAYER_COLORS[layer]}">
+      <h3>${LAYER_NAMES[layer]}</h3>
+      <ul>
+        ${fieldsByLayer[layer].map(f => `
+          <li class="field" data-field-idx="${f._idx}">
+            <div class="field-header">
+              <span class="field-offset">byte ${f.off}${f.len > 1 ? '–' + (f.off + f.len - 1) : ''} (${f.len}B)</span>
+              <span class="field-name">${f.name}${f.confirmed ? '<span class="badge badge-confirmed">VALIDATED</span>' : ''}</span>
+              <span class="field-value">${bytes.slice(f.off, f.off + f.len).join(' ')}</span>
+            </div>
+            <div class="field-notes">${f.notes}</div>
+          </li>
+        `).join('')}
+      </ul>
+    </div>
+  `).join('');
+
+  // Hover wiring
+  document.querySelectorAll('.byte, .field').forEach(el => {
+    el.addEventListener('mouseenter', () => {
+      const idx = el.dataset.fieldIdx;
+      if (idx === '') return;
+      document.querySelectorAll(`[data-field-idx="${idx}"]`)
+        .forEach(e => e.classList.add('highlight'));
+    });
+    el.addEventListener('mouseleave', () => {
+      document.querySelectorAll('.highlight')
+        .forEach(e => e.classList.remove('highlight'));
+    });
+  });
+}
+
+renderPacketList();
+// Auto-load 0xD5/len-71 (the richest one) on first view
+const firstBtn = document.querySelector('#packet-list button[data-id="D5_71"]');
+if (firstBtn) firstBtn.click();
+</script>
+
+</body>
+</html>

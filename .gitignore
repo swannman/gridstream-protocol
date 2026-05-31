@@ -1,0 +1,27 @@
+# Raw RF captures and corpus — never commit (large, and may contain neighbor metadata)
+captures/
+*.log
+*.log.*
+*.pcap
+*.cf32
+*.cs8
+*.sigmf-data
+*.sigmf-meta
+
+# Ground-truth consumption data — never commit (personal)
+pse_*.csv
+*_telemetry.csv
+*_kwh.csv
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Anonymized, publishable corpus — neighbor LAN IDs rewritten, capture metadata
+# stripped, corrupt frames dropped (see capture/README.md). Safe to commit.
+!capture/corpus.log
