@@ -114,7 +114,7 @@ This builds on the open-source GridStream community:
 
 - **RECESSIM** — the [Recessim wiki GridStream
   page](https://wiki.recessim.com/view/Landis%2BGyr_GridStream_Protocol) and the
-  [`gr-smart_meters`](https://github.com/RECESSIM/gr-smart_meters) GNU Radio
+  [`gr-smart_meters`](https://github.com/BitBangingBytes/gr-smart_meters) GNU Radio
   module, which this capture pipeline depends on.
 - **rtl_433** — its [`gridstream.c`](https://github.com/merbanan/rtl_433/blob/master/src/devices/gridstream.c)
   decoder independently confirms the PSE CRC init value `0x142A`.

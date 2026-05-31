@@ -438,7 +438,7 @@ An interactive field-level decoder with a captured example of every packet famil
 ## References
 
 - Recessim wiki — https://wiki.recessim.com/view/Landis%2BGyr_GridStream_Protocol
-- `gr-smart_meters` GNU Radio module — https://github.com/RECESSIM/gr-smart_meters
+- `gr-smart_meters` GNU Radio module — https://github.com/BitBangingBytes/gr-smart_meters
 - rtl_433 [`gridstream.c`](https://github.com/merbanan/rtl_433/blob/master/src/devices/gridstream.c) decoder — independent confirmation of the PSE CRC init `0x142A`
 - L+G doc 98-9112 Rev AA — *High Speed FOCUS AX Modular Gridstream RF Endpoint Data Sheet*. Confirms the sub-GHz wire protocol as "Grid Stream Protocol for Command Center"; lists ANSI C12.19 as internal data model; ZigBee listed separately for the 2.4 GHz HAN radio.
 - L+G doc 98-9108 Rev BA — *RF Mesh Command Center User Guide* v8.1. Command Center as ANSI C12.22 Master Relay + Gateway; App Titles; C12.19 extended tables (decades 12–13).

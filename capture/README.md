@@ -12,7 +12,7 @@ pipeline — nothing here transmits.
 
 ## Software
 
-GNU Radio with the [`gr-smart_meters`](https://github.com/RECESSIM/gr-smart_meters)
+GNU Radio with the [`gr-smart_meters`](https://github.com/BitBangingBytes/gr-smart_meters)
 out-of-tree module. The flowgraph is opportunistic burst detection rather than a
 fixed-grid channelizer — GridStream is frequency-hopping and the spectrum is
 idle most of the time, so energy-detect bursts anywhere in the window:
