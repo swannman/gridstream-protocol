@@ -22,11 +22,11 @@ The flowgraph is opportunistic burst detection rather than a fixed-grid channeli
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │ APPLICATION LAYER: COSEM-style data model, WMBus-style metadata  │
-│   • COSEM interface-class id (2B BE), classes 8-20               │
+│   • Object identity = 16-bit selector (2B BE) ALONE              │
+│   • "class id" (2B BE) is a derived bin: class = (sel+8)>>4      │
 │   • L+G calling convention `09 03` (in place of a DLMS APDU)     │
-│   • Register identity = class_id + selector byte                 │
 │   • Per-packet sequence/value field (not a stable identifier)    │
-│   • WMBus-style DIF (1B) + VIF (1B): value type + unit metadata  │
+│   • DIF/VIF-shaped bytes are per-frame, not per-object tags      │
 │   • Register VALUES are not present in plaintext                 │
 ├──────────────────────────────────────────────────────────────────┤
 │ SESSION HEADER (in long frames): L+G proprietary                 │
@@ -240,18 +240,18 @@ The 77-byte `0x47` frame — the richest plaintext payload. A long L+G session h
 | 43–45 | 3 B | Routing trailer end | `01 03 25` |
 | 46–56 | 11 B | Zero padding | `00 × 11` |
 | 57–59 | 3 B | Payload transition | variable |
-| 60–61 | 2 B | COSEM class_id (BE) | |
+| 60–61 | 2 B | "class id" (BE) — derived bin | `class = (selector+8)>>4`, exact 97/97 selectors ✓; carries no information beyond the selector |
 | 62 | 1 B | `09` | L+G calling-convention marker |
 | 63 | 1 B | `03` | |
-| 64 | 1 B | `00` | separator |
-| 65 | 1 B | Register / attribute selector ~ | small stable per-class set ✓ |
+| 64 | 1 B | selector hi byte | `0`, rolls to `1` for selector ≥ 256 ✓ |
+| 65 | 1 B | selector lo byte | low byte of the 16-bit object selector — the true (and only) object axis ✓ |
 | 66–70 | 5 B | L+G OBIS-like prefix | `20 30 2D 84 80` |
-| 71–72 | 2 B | Per-packet sequence / nonce ~ | unique per packet even for a fixed selector ✓; not an identifier and not the value |
-| 73 | 1 B | DIF (value type) | parses as IEC 13757-3 in 100% of frames ✓; see *Application Layer* |
-| 74 | 1 B | VIF (unit) | low nibble always `0` ✓; high-nibble unit class ~ |
+| 71–72 | 2 B | byte 71 bounded field; byte 72 sequence/nonce | 72 uniform 8-bit, ~unique per packet ✓; 71 bounded 0–23 ✓, role undetermined |
+| 73 | 1 B | DIF-shaped field | valid IEC 13757-3 in 100% ✓, but per-frame — not a stable per-object type; see *The trailing bytes (71–74)* |
+| 74 | 1 B | small decimal field | low nibble always `0` ✓; high nibble uniform `0`–`9` ✓ — not a confirmed unit |
 | 75–76 | 2 B | CRC-16 | |
 
-The 15-byte COSEM region (60–74) is: class_id (2) + `09 03` (2) + `00` separator (1) + selector (1) + OBIS-like prefix (5) + per-packet sequence/nonce (2) + DIF (1) + VIF (1). This is COSEM short-name addressing wrapped in L+G's calling convention rather than a standard DLMS APDU.
+The 15-byte application-layer region (60–74) is: derived class bin (2) + `09 03` (2) + 16-bit selector (2) + OBIS-like prefix (5) + per-packet sequence/nonce (2) + DIF-shaped (1) + VIF-shaped (1). The layout resembles COSEM short-name addressing wrapped in L+G's calling convention rather than a standard DLMS APDU, but diverges from it in every detail checked: the class bin is derived arithmetically from the selector (`class = (selector+8)>>4`), the OBIS-like prefix is not a valid OBIS code, and the DIF/VIF-shaped bytes vary per frame. The 60–61 "class id" is therefore a redundant bin, not an independent COSEM interface-class axis (see *COSEM class IDs* below).
 
 ## 0xD5 Bulk Transfer (len-125)
 
@@ -334,16 +334,16 @@ The frame partitions into a plaintext header, a 6-byte high-entropy ciphertext �
 Data-bearing frames carry an L+G payload structured like COSEM short-name addressing. The skeleton is:
 
 ```
-[class_id 2B BE] [09 03] [selector] [OBIS-like prefix] [seq/value] [DIF] [VIF]
+[class bin 2B BE] [09 03] [selector 2B BE] [OBIS-like prefix] [seq/value] [DIF] [VIF]
 ```
 
 ### COSEM class IDs
 
-The 2-byte big-endian class_id occupies the **standard IEC 62056-6-2 COSEM interface-class numbering space**, observed contiguous from 8 to 20 ✓. Standard classes appear alongside numbers (13, 14, 16, 20) that carry no standard COSEM class; reading those as L+G vendor extensions is inferred (~). The *numbering* is standard ✓, but the object/OBIS *allocations* behind the classes are L+G-specific.
+**The 2-byte "class id" is not an independent axis — it is a deterministic bin of the selector:** `class = (selector + 8) >> 4`, exact for all 97 observed selectors (100% ✓), with no selector ever mapping to more than one class ✓. The observed class range 8–20 is simply the selector range 130–320 floor-binned into 16-wide bins offset by 8; the apparent "contiguous COSEM interface-class numbering space" is an artifact of binning a contiguous selector range, not evidence of a COSEM class enumeration. The field carries **zero information beyond the selector**.
 
-Shares below are over the 5,199 CRC-valid status-push (`0xD5` len-71) frames in the corpus, every class 8–20 present:
+For reference, the table maps each bin number to the IEC 62056-6-2 interface class at that number. The class is computed from the selector, not chosen per object. Shares are over the 5,199 CRC-valid status-push (`0xD5` len-71) frames in the corpus, every bin 8–20 present:
 
-| Class | COSEM interface class | Standard? | Share |
+| Bin | COSEM class at this number | Standard? | Share |
 |---|---|---|---|
 | 8 (`0x08`) | Clock | Standard | 1.40% |
 | 9 (`0x09`) | Script_table | Standard | 0.56% |
@@ -359,20 +359,32 @@ Shares below are over the 5,199 CRC-valid status-push (`0xD5` len-71) frames in 
 | 19 (`0x13`) | IEC_local_port_setup | Standard | 0.06% |
 | 20 (`0x14`) | L+G vendor extension | Non-standard | 0.35% |
 
-Association_SN dominates at 59.53% ✓, consistent with meters advertising their short-name object directory (~). Our meter advertises 170 distinct `(class_id, DIF, VIF)` register objects across its len-71 status-push frames ✓.
+Bin 12 dominates at 59.53% ✓ — i.e. the most common selectors fall in 184–199. The object catalog is one-dimensional: a meter references ~27 distinct **selectors** ✓; the bin adds nothing, since it is a function of the selector. DIF and VIF vary per frame, not per object, so they are not part of object identity (see *The trailing bytes (71–74)* below).
 
 ### Markers and fields
 
 - **`09 03`** — constant regardless of class ✓; read as an L+G "attribute value follows" calling convention (~). A `09 04` variant (A-XDR octet-string length 4 instead of 3) occurs in 9.14% of status-push (len-71) frames ✓ at the same offset (byte 63) — a benign length-prefix variant in the same role (~).
-- **Selector** (byte 65 in len-71) — small and stable per class ✓, and its high nibble tracks the advertised class_id ✓; reading it as a register/attribute index under short-name addressing is inferred (~).
+- **Selector** (16-bit, bytes 64–65 in len-71; `b64<<8 | b65`, with byte 64 ∈ {0,1}) — the true and only object axis, range 130–320 ✓. The class bin is derived from it by `class = (selector+8)>>4` (97/97 ✓), with bin boundaries at selector offset 8 (16-wide bins). Reading the selector as a register/attribute index under short-name addressing is inferred (~); its per-object *semantics* (which physical quantity each selector names) remain unknown.
 - **OBIS-like prefix `20 30 2D 84 80`** — a 5-byte constant ✓, and not a standard OBIS code ✓ (byte 0 `0x20` exceeds the IEC 62056-61 medium range); read as a vendor logical-name reference (~).
-- **Per-packet sequence / nonce** (bytes 71–72 in len-71; the post-`09 03` 2-byte field in directed frames) — unique per packet even for a fixed selector ✓; not a stable identifier and not the measured value ✓. Whether it is a sequence counter or a nonce is not determined.
+- **Trailing bytes (71–74) and CRC (75–76)** — byte 72 is a per-packet sequence/nonce (unique per packet even for a fixed selector ✓; sequence vs. nonce undetermined), bytes 75–76 a genuine CRC, and bytes 71/73/74 small constrained fields whose role is not established. Treated in full under *The trailing bytes (71–74)* below.
 
-### DIF / VIF metadata
+### The trailing bytes (71–74): what we can and cannot say
 
-The two bytes after the addressing fields are WMBus-style metadata declaring the value's type and unit — not the value itself.
+The four bytes between the object reference and the CRC are the least-understood part of the status-push frame. We first read them as a per-packet sequence/nonce (71–72) plus WMBus DIF/VIF metadata (73–74). Deeper analysis shows that reading is only partly right: **the role of these four bytes is not established.** This section gives what we observe, which hypotheses survive the data, and what can actually be claimed. (n = 5,199 CRC-valid len-71 status-push frames; every figure traces to `capture/corpus.log`.)
 
-**DIF (Data Information Field, byte 73 in len-71)** is a structurally valid IEC 13757-3 §6.2.2 byte in 100% of frames ✓:
+**What we observe.**
+
+| byte | range | distinct | entropy | character |
+|---|---|---|---|---|
+| 71 | `0x00`–`0x17` | 24 | 4.57 bits | bounded — plain binary 0–23 |
+| 72 | `0x00`–`0xFF` | 256 | 7.96 bits | uniform — per-packet sequence/nonce |
+| 73 | `0x11`–`0x20` | 16 | 2.68 bits | DIF-shaped; high nibble pinned `1` |
+| 74 | `0x00`–`0x90` | 10 | 3.32 bits | low nibble pinned `0`; high nibble uniform `0`–`9` |
+| 75–76 | `0x00`–`0xFF` | 256 | 7.96 bits | uniform; passes the `0x142A` CRC |
+
+A nibble test (BCD requires every nibble to stay `0`–`9`) separates them further: bytes 71 (low nibble), 72, and 75–76 all use `A`–`F` ✓ (binary); byte 73's low nibble uses `A`–`F` in 2.1% of frames ✓ (the IEC length codes `0x1A`–`0x1F`); byte 74 is the **only** strictly-decimal field — both nibbles `0`–`9` in 100% of frames, with the low nibble always `0` ✓.
+
+Byte 73 parses as a structurally valid IEC 13757-3 §6.2.2 DIF in 100% of frames ✓:
 
 ```
 Bit 7    : Extension flag (0 = no DIFE)
@@ -381,9 +393,9 @@ Bit 4    : Storage number LSB (1)
 Bits 3-0 : Data length / coding
 ```
 
-99.98% of status-push DIFs (5,198 / 5,199) have bit 7 = 0, function = instantaneous, storage = 1 — so the byte falls in `0x11`–`0x1F` — with a single `0x20` frame (function = maximum) the lone exception ✓. Shares of the 5,199 frames:
+99.98% (5,198 / 5,199) sit in `0x11`–`0x1F` (bit 7 = 0, instantaneous, storage = 1), one `0x20` frame the lone exception ✓. The **nominal** IEC meaning of the low-nibble length code (these are code meanings, **not** confirmed object types — see below):
 
-| DIF | Type | Share |
+| DIF | Nominal type | Share |
 |---|---|---|
 | `0x11` | uint8 | 43.12% |
 | `0x12` | uint16 | 12.18% |
@@ -395,13 +407,28 @@ Bits 3-0 : Data length / coding
 | `0x18` | selection-for-readout | 3.23% |
 | `0x19`–`0x1B` | 2/4/6-digit BCD | 3.19% |
 | `0x1C`–`0x1F` | 8-digit BCD … special functions | 0.48% |
-| `0x20` | function = maximum (non-instantaneous) | 0.02% |
+| `0x20` | function = maximum | 0.02% |
 
-**VIF (Value Information Field, byte 74 in len-71)** — read as the unit field (~). The low nibble is `0` in 100% of frames ✓; the high nibble varies across `0x0`–`0x9` ✓. Reading the high nibble as a unit class under a custom L+G VIF mapping with the multiplier bits zeroed is inferred (~); translating a code to a physical unit requires the meter's object dictionary.
+Crucially, for a fixed selector the low-nibble width **changes frame-to-frame**: only 23 of 97 objects ever use a single width (median 4 distinct widths, max 14) ✓. A genuine per-object type tag would be constant.
 
-### Register values are not in plaintext
+**Hypotheses, and whether they hold.**
 
-The plaintext RF channel carries register **identity** (class_id + selector) and **metadata** (DIF type, VIF unit) — an Association_SN-style "object X has new data, of type Y, in unit Z" advertisement — but **not the register value (✓, ground-truthed against PSE Green Button)**. No monotone cumulative register (e.g. kWh) appears in any plaintext field, and the candidate value fields do not correlate with metered consumption ✓. Cumulative energy and instantaneous measurements are therefore not on the plaintext wire; they most plausibly travel in the encrypted `0xD2`/CI=`0x52` channel under per-endpoint AES-256 (~), which is not passively recoverable either way. The authoritative source for consumption data is PSE Green Button (opower) hourly export.
+| Hypothesis | Verdict | Evidence |
+|---|---|---|
+| 71–74 hold a plaintext register value (kWh, etc.) | ✗ rejected | nothing drifts monotonically; byte 71 hops randomly across 0–23; no field correlates with PSE Green Button ✓ |
+| 71–74 are an encrypted value block | ✗ rejected | ciphertext is ~8 bits/byte throughout; only byte 72 reaches that (7.96), while 71/73/74 are constrained to 2.7–4.6 bits ✓ |
+| byte 73 declares a stable per-object data type | ✗ rejected | width varies per frame; only 23/97 objects are single-width ✓ |
+| 73–74 encode a BCD value | ✗ rejected | 191 frames carry IEC "BCD" DIF codes (`0x19`–`0x1F`), yet no BCD digits follow — byte 74's low nibble is `0` in all 191 ✓ |
+| byte 74 high nibble is a semantic unit class | ✗ unlikely | a unit would skew toward the meter's actual quantities; instead it is uniform over `0`–`9` ✓ |
+| byte 73 is *shaped* like a valid IEC DIF | ✓ holds | parses valid in 100%; high nibble pinned instantaneous/storage=1 in 99.98% ✓ |
+| byte 72 is a sequence/nonce; 75–76 a real CRC | ✓ holds | 72 is uniform 8-bit and ~unique per packet; 75–76 are uniform 8-bit and pass the `0x142A` CRC ✓ |
+
+**What we can state.**
+
+- The plaintext frame carries an **object reference** — the 16-bit **selector** alone (the "class id" is a redundant `(selector+8)>>4` bin), a closed, densely-enumerated short-name address space — and **not the register value** (✓, ground-truthed against PSE Green Button). No monotone cumulative register (e.g. kWh) appears in any plaintext field ✓.
+- Byte 73 is **DIF-shaped but per-frame, not per-object** — it does not declare a stable object type, and its IEC "BCD" codes carry no BCD payload. Byte 74 is a lone decimal-digit-like field (uniform `0`–`9`) of undetermined meaning — not a confirmed unit.
+- Byte 72 is the per-packet sequence/nonce ✓ (which of the two is undetermined); bytes 75–76 are a genuine CRC ✓. Bytes 71, 73, 74 are small, constrained cleartext fields whose semantics we cannot pin down from passive capture.
+- Cumulative energy and instantaneous measurements are therefore **not on the plaintext wire**; they most plausibly travel in the encrypted `0xD2`/CI=`0x52` channel under per-endpoint AES-256 (~), not passively recoverable either way. The authoritative source for consumption data is the PSE Green Button (opower) hourly export.
 
 ## Security Model
 

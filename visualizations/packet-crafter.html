@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GridStream 0xD5 Packet Crafter</title>
+<style>
+  :root{
+    --bg:#0f1116; --panel:#171a21; --line:#262b36; --fg:#d7dce5; --mut:#8b94a6;
+    --acc:#6ea8fe; --ok:#5fd07a; --warn:#e0b341; --err:#ef6b6b;
+    --c-const:#3a3f4b; --c-hdr:#3b4a63; --c-addr:#43523a; --c-time:#5a4663;
+    --c-obj:#6b4a2e; --c-val:#2f5a55; --c-ent:#5a3a3a; --c-crc:#264a64;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  header{padding:12px 16px;border-bottom:1px solid var(--line);
+         display:flex;gap:16px;align-items:baseline;flex-wrap:wrap}
+  header h1{font-size:15px;margin:0;font-weight:600}
+  header .sub{color:var(--mut)}
+  .wrap{display:grid;grid-template-columns:minmax(420px,1fr) minmax(420px,1fr);
+        gap:0;min-height:calc(100vh - 50px)}
+  .col{padding:14px 16px;overflow:auto}
+  .col.left{border-right:1px solid var(--line)}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);
+     margin:18px 0 8px;border-bottom:1px solid var(--line);padding-bottom:4px}
+  h2:first-child{margin-top:0}
+  .field{display:grid;grid-template-columns:130px 1fr;gap:10px;align-items:center;
+         margin:6px 0}
+  .field label{color:var(--mut)}
+  .field .ctl{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  input,select{background:#0c0e13;color:var(--fg);border:1px solid var(--line);
+               border-radius:5px;padding:5px 7px;font:inherit}
+  input:focus,select:focus{outline:none;border-color:var(--acc)}
+  input.bad{border-color:var(--err)}
+  input.hex{width:120px;text-transform:lowercase}
+  input.byte{width:64px;text-transform:lowercase}
+  input.num{width:130px}
+  select{min-width:120px;max-width:340px}
+  button{background:#222734;color:var(--fg);border:1px solid var(--line);
+         border-radius:5px;padding:5px 9px;cursor:pointer}
+  button:hover{border-color:var(--acc)}
+  button.sm{padding:3px 7px;font-size:11px}
+  .hint{color:var(--mut);font-size:11px}
+  .chk{display:flex;gap:6px;align-items:center}
+  /* output */
+  .hexbox{background:#0c0e13;border:1px solid var(--line);border-radius:6px;
+          padding:12px;word-break:break-all;line-height:1.9;font-size:14px}
+  .hexbox .b{padding:1px 2px;border-radius:3px}
+  .crcline{margin:10px 0;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+  .pill{padding:3px 9px;border-radius:999px;font-size:12px}
+  .pill.ok{background:#15351f;color:var(--ok);border:1px solid #2a5e3a}
+  .copy{margin-left:auto}
+  table.bd{border-collapse:collapse;width:100%;margin-top:6px;font-size:12px}
+  table.bd th,table.bd td{border:1px solid var(--line);padding:4px 7px;text-align:left;
+                          vertical-align:top}
+  table.bd th{color:var(--mut);font-weight:600;background:#12151c}
+  table.bd td.off{color:var(--mut);white-space:nowrap}
+  table.bd td.hex{font-family:inherit;white-space:nowrap}
+  table.bd td.mean{color:var(--mut);max-width:380px}
+  .cf{display:inline-block;font-size:10px;text-transform:uppercase;letter-spacing:.04em;
+      padding:1px 6px;border-radius:999px;margin-right:7px;vertical-align:1px}
+  .cf-k{background:#15351f;color:var(--ok);border:1px solid #2a5e3a}
+  .cf-p{background:#3a3413;color:var(--warn);border:1px solid #6b5a1f}
+  .cf-o{background:#3a2424;color:var(--err);border:1px solid #6b3434}
+  .tag{display:inline-block;width:11px;height:11px;border-radius:2px;
+       vertical-align:middle;margin-right:5px}
+  .legend{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0;color:var(--mut);font-size:11px}
+  .legend span{display:flex;gap:5px;align-items:center}
+  /* color classes shared between hex + table tags */
+  .k-const{background:var(--c-const)} .k-hdr{background:var(--c-hdr)}
+  .k-addr{background:var(--c-addr)} .k-time{background:var(--c-time)}
+  .k-obj{background:var(--c-obj)} .k-val{background:var(--c-val)}
+  .k-ent{background:var(--c-ent)} .k-crc{background:var(--c-crc)}
+</style>
+</head>
+<body>
+<header>
+  <h1>GridStream 0xD5 Packet Crafter</h1>
+  <span class="sub">77-byte plaintext periodic beacon &middot; len=0x47 &middot; CRC-16/CCITT init 0x142A</span>
+</header>
+
+<div class="wrap">
+  <!-- ============ CONTROLS ============ -->
+  <div class="col left">
+    <h2>Header</h2>
+    <div class="field">
+      <label>CI (byte 6)</label>
+      <div class="ctl">
+        <select id="ci">
+          <option value="81">0x51 &mdash; scheduled</option>
+          <option value="85">0x55 &mdash; event</option>
+        </select>
+      </div>
+    </div>
+
+    <h2>Addressing</h2>
+    <div class="field">
+      <label>Dst collector (7-10)</label>
+      <div class="ctl">
+        <select id="dst">
+          <option>9000015e</option><option>9000011d</option><option>9000000e</option>
+          <option selected>900001c3</option><option>90000119</option><option>900001ab</option>
+          <option>900000b6</option><option>90000174</option>
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label>Src / LAN ID (11-14)</label>
+      <div class="ctl">
+        <input id="src" class="hex" value="90000000" maxlength="8" spellcheck="false">
+        <span class="hint">echoed @33-36, 38-41</span>
+      </div>
+    </div>
+
+    <h2>Timing</h2>
+    <div class="field">
+      <label>Timestamp (16-19)</label>
+      <div class="ctl">
+        <input id="ts" class="num" type="number">
+        <span class="chk"><input type="checkbox" id="tsfreeze"><label for="tsfreeze" class="hint">freeze</label></span>
+      </div>
+    </div>
+    <div class="field">
+      <label></label>
+      <div class="ctl hint" id="tshuman"></div>
+    </div>
+    <div class="field">
+      <label>Uptime s (24-27)</label>
+      <div class="ctl">
+        <input id="uptime" class="num" type="number" value="18498252">
+        <span class="hint" id="uphuman"></span>
+      </div>
+    </div>
+
+    <h2>Object selector (60-65)</h2>
+    <div class="field">
+      <label>Object (sel idx)</label>
+      <div class="ctl"><select id="sel"></select></div>
+    </div>
+    <div class="field">
+      <label></label>
+      <div class="ctl hint" id="selderived"></div>
+    </div>
+
+    <h2>Payload scalar</h2>
+    <div class="field">
+      <label>Value (57-59)</label>
+      <div class="ctl">
+        <input id="val" class="num" type="number" min="22000" max="1002000" step="1000" value="609000">
+        <span class="hint">obs 22000&ndash;1002000, &times;1000 steps</span>
+      </div>
+    </div>
+    <div class="field">
+      <label>b21 (byte 21)</label>
+      <div class="ctl">
+        <select id="b21"><option value="1" selected>1</option><option value="0">0</option><option value="2">2</option></select>
+      </div>
+    </div>
+
+    <h2>Trailer descriptors (73-74)</h2>
+    <div class="field">
+      <label>DIF (byte 73)</label>
+      <div class="ctl"><select id="dif"></select></div>
+    </div>
+    <div class="field">
+      <label>VIF (byte 74)</label>
+      <div class="ctl"><select id="vif"></select></div>
+    </div>
+
+    <h2>Entropy / opaque <span class="hint">(corpus-constrained)</span></h2>
+    <div class="field">
+      <label>b15 (byte 15)</label>
+      <div class="ctl"><input id="b15" class="byte" value="00" maxlength="2" spellcheck="false">
+        <button class="sm" data-rnd="b15">rnd</button>
+        <span class="hint">even only (LSB=0)</span></div>
+    </div>
+    <div class="field">
+      <label>Digest (22-23)</label>
+      <div class="ctl"><input id="dig" class="hex" value="5f04" maxlength="4" spellcheck="false">
+        <button class="sm" data-rnd="dig">rnd</button>
+        <span class="hint">low byte even</span></div>
+    </div>
+    <div class="field">
+      <label>Seq b71 (byte 71)</label>
+      <div class="ctl"><input id="b71" class="num" type="number" min="0" max="23" step="1" value="16">
+        <span class="hint">counter 0&ndash;23</span></div>
+    </div>
+    <div class="field">
+      <label>Nonce b72 (byte 72)</label>
+      <div class="ctl"><input id="b72" class="byte" value="f4" maxlength="2" spellcheck="false">
+        <button class="sm" data-rnd="b72">rnd</button>
+        <span class="hint">full 0x00&ndash;0xff</span></div>
+    </div>
+
+    <h2>CRC</h2>
+    <div class="field">
+      <label>CRC-16 init</label>
+      <div class="ctl"><input id="crcinit" class="hex" value="142A" maxlength="4" spellcheck="false">
+        <button class="sm" data-rnd="crcdef">PSE</button>
+        <span class="hint">poly 0x1021; PSE = 0x142A</span></div>
+    </div>
+
+    <h2>Presets</h2>
+    <div class="ctl">
+      <button id="loadex">Load captured example</button>
+      <button id="randall">Randomize entropy</button>
+    </div>
+  </div>
+
+  <!-- ============ OUTPUT ============ -->
+  <div class="col right">
+    <h2>Frame (77 bytes)</h2>
+    <div class="crcline">
+      <span class="pill" id="lenpill">len 77</span>
+      <span class="pill ok" id="crcpill">CRC 0x0000</span>
+      <button class="copy sm" id="copy">copy hex</button>
+    </div>
+    <div class="hexbox" id="hex"></div>
+
+    <div class="legend">
+      <span><i class="tag k-const"></i>const</span>
+      <span><i class="tag k-hdr"></i>header</span>
+      <span><i class="tag k-addr"></i>address</span>
+      <span><i class="tag k-time"></i>time</span>
+      <span><i class="tag k-obj"></i>object</span>
+      <span><i class="tag k-val"></i>value</span>
+      <span><i class="tag k-ent"></i>entropy</span>
+      <span><i class="tag k-crc"></i>crc</span>
+    </div>
+
+    <h2>Field breakdown</h2>
+    <div class="legend">
+      <span><span class="cf cf-k">known</span> understood</span>
+      <span><span class="cf cf-p">partial</span> structure known, semantics uncertain</span>
+      <span><span class="cf cf-o">opaque</span> uncharacterized / entropy</span>
+    </div>
+    <table class="bd"><thead>
+      <tr><th>off</th><th>field</th><th>bytes</th><th>decoded</th><th>meaning</th></tr>
+    </thead><tbody id="bd"></tbody></table>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ---- selector map: idx -> [class, b63(cc_len), n_observed] -------------------
+const SELMAP = {
+130:[8,2,5],131:[8,2,1],132:[8,2,26],133:[8,2,21],134:[8,2,15],135:[8,2,5],
+136:[9,2,10],137:[9,2,14],138:[9,2,2],146:[9,2,1],148:[9,2,1],150:[9,2,1],
+154:[10,2,1],
+172:[11,2,2],173:[11,2,1],174:[11,2,1],179:[11,2,18],180:[11,2,29],181:[11,2,7],182:[11,2,8],183:[11,2,7],
+184:[12,2,2],185:[12,2,31],187:[12,2,27],188:[12,2,7],189:[12,2,1],190:[12,2,3],191:[12,2,4],192:[12,2,6],193:[12,2,5],
+194:[12,3,181],195:[12,3,643],196:[12,3,929],197:[12,3,630],198:[12,3,333],199:[12,3,293],
+200:[13,3,228],201:[13,3,96],202:[13,3,166],203:[13,3,45],204:[13,3,28],205:[13,3,75],206:[13,3,49],207:[13,3,9],
+208:[13,2,5],209:[13,2,1],210:[13,2,2],
+211:[13,3,14],212:[13,3,58],213:[13,3,38],214:[13,3,87],215:[13,3,109],
+216:[14,3,23],217:[14,3,6],218:[14,3,3],222:[14,3,10],
+227:[14,2,4],
+228:[14,3,3],229:[14,3,1],230:[14,3,4],231:[14,3,1],
+233:[15,3,1],241:[15,3,1],242:[15,3,4],243:[15,3,16],244:[15,3,31],245:[15,3,83],246:[15,3,70],247:[15,3,65],
+248:[16,3,34],249:[16,3,13],250:[16,3,1],252:[16,3,1],253:[16,3,4],
+254:[16,2,2],
+255:[16,3,1],256:[16,3,1],257:[16,3,4],
+258:[16,4,37],259:[16,4,165],260:[16,4,139],261:[16,4,87],262:[16,4,44],263:[16,4,23],
+266:[17,3,2],269:[17,4,3],270:[17,3,4],271:[17,4,1],272:[17,3,1],274:[17,3,3],
+286:[18,3,1],
+296:[19,3,2],310:[19,4,1],
+312:[20,4,9],318:[20,4,5],319:[20,4,1],320:[20,3,3]
+};
+
+const DIFS = [17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32];
+const VIFS = [0,16,32,48,64,80,96,112,128,144];
+
+// ---- the working frame -------------------------------------------------------
+const frame = new Uint8Array(77);
+
+// constant scaffold written once; control-driven bytes overwritten each rebuild
+function applyConstants(){
+  const set=(off,arr)=>arr.forEach((v,i)=>frame[off+i]=v);
+  set(0,[0x80,0xff,0x2a]); // sync
+  frame[3]=0xd5; frame[4]=0x00; frame[5]=0x47;
+  frame[20]=0x00;
+  frame[28]=0xa4; frame[29]=0x0b;
+  set(30,[0x01,0x01,0xfe]);
+  frame[37]=0x00;
+  set(42,[0x00,0x01,0x03,0x25]);
+  for(let i=46;i<=56;i++) frame[i]=0x00; // zero pad incl value hi-byte
+  frame[62]=0x09;
+  set(66,[0x20,0x30,0x2d,0x84,0x80]); // obis prefix
+}
+
+// ---- helpers -----------------------------------------------------------------
+const $=id=>document.getElementById(id);
+const hx=n=>n.toString(16).padStart(2,'0');
+function be(off,len){let v=0;for(let i=0;i<len;i++)v=(v<<8)|frame[off+i];return v>>>0;}
+function putBE(off,len,v){for(let i=len-1;i>=0;i--){frame[off+i]=v&0xff;v=Math.floor(v/256);}}
+function parseHex(s){return /^[0-9a-fA-F]*$/.test(s)?s:null;}
+function randByte(){return Math.floor(Math.random()*256);}
+
+function crc16(data,init=0x142A){
+  let crc=init;
+  for(const x of data){
+    crc^=(x<<8);
+    for(let i=0;i<8;i++){
+      crc = (crc&0x8000) ? ((crc<<1)^0x1021)&0xffff : (crc<<1)&0xffff;
+    }
+  }
+  return crc>>>0;
+}
+
+// ---- byte category map for coloring -----------------------------------------
+// returns key class per byte offset
+function catOf(off){
+  if(off<=5) return 'const';                 // sync + type + rsv + len
+  if(off===6) return 'hdr';                   // CI
+  if(off>=7 && off<=14) return 'addr';        // dst+src
+  if(off===15) return 'ent';
+  if(off>=16 && off<=19) return 'time';
+  if(off===20) return 'const';
+  if(off===21) return 'hdr';
+  if(off>=22 && off<=23) return 'ent';
+  if(off>=24 && off<=27) return 'time';
+  if(off>=28 && off<=32) return 'const';
+  if(off>=33 && off<=41) return 'addr';       // echoes (+sep37)
+  if(off>=42 && off<=56) return 'const';
+  if(off>=57 && off<=59) return 'val';
+  if(off>=60 && off<=65) return 'obj';        // class+cc+sel
+  if(off>=66 && off<=70) return 'const';      // obis prefix
+  if(off>=71 && off<=72) return 'ent';
+  if(off>=73 && off<=74) return 'obj';        // dif/vif descriptors
+  if(off>=75) return 'crc';
+  return 'const';
+}
+
+// ---- read controls -> frame --------------------------------------------------
+function readControls(){
+  applyConstants();
+
+  frame[6]=parseInt($('ci').value,10);
+
+  // dst
+  const dst=$('dst').value;
+  for(let i=0;i<4;i++) frame[7+i]=parseInt(dst.substr(i*2,2),16);
+
+  // src (+ echoes)
+  let src=$('src').value.trim().toLowerCase();
+  const srcOk = src.length===8 && parseHex(src)!==null;
+  $('src').classList.toggle('bad',!srcOk);
+  if(srcOk){
+    for(let i=0;i<4;i++){
+      const v=parseInt(src.substr(i*2,2),16);
+      frame[11+i]=v; frame[33+i]=v; frame[38+i]=v;
+    }
+  }
+
+  // b15: corpus shows ALWAYS even -> reject odd
+  { const v=byteFrom('b15',true); if(v!==null) frame[15]=v; }
+
+  // timestamp
+  let ts=parseInt($('ts').value,10); if(!isFinite(ts))ts=0;
+  putBE(16,4,ts>>>0);
+
+  frame[21]=parseInt($('b21').value,10);
+
+  // digest: high byte free, low byte (b23) ALWAYS even in corpus
+  hexFieldInto('dig',22,2,true);
+
+  // uptime
+  let up=parseInt($('uptime').value,10); if(!isFinite(up))up=0;
+  putBE(24,4,up>>>0);
+
+  // value 57-59 (3 bytes); byte56 stays 0. corpus: multiple of 1000, 22000..1002000
+  let val=parseInt($('val').value,10); if(!isFinite(val))val=22000;
+  val=Math.round(val/1000)*1000;
+  val=Math.max(22000,Math.min(1002000,val));
+  const valOob = parseInt($('val').value,10)!==val;
+  $('val').classList.toggle('bad', valOob && $('val').value!=='');
+  putBE(57,3,val);
+
+  // object selector
+  const idx=parseInt($('sel').value,10);
+  const m=SELMAP[idx];
+  putBE(60,2,m[0]);        // class
+  frame[63]=m[1];          // cc_len
+  frame[64]=(idx>>8)&0xff; // sel hi
+  frame[65]=idx&0xff;      // sel lo
+
+  // seq counter b71 (corpus 0..23) + free nonce b72
+  let s71=parseInt($('b71').value,10);
+  const s71ok=isFinite(s71)&&s71>=0&&s71<=23;
+  $('b71').classList.toggle('bad',!s71ok);
+  if(s71ok) frame[71]=s71;
+  { const v=byteFrom('b72',false); if(v!==null) frame[72]=v; }
+
+  frame[73]=parseInt($('dif').value,10);
+  frame[74]=parseInt($('vif').value,10);
+
+  // CRC over bytes[6:75]  (offsets 6..74 inclusive); init is configurable
+  const ie=$('crcinit'); const is=ie.value.trim();
+  const initOk=is.length===4 && parseHex(is)!==null;
+  ie.classList.toggle('bad',!initOk);
+  const init=initOk?parseInt(is,16):0x142A;
+  const crc=crc16(frame.slice(6,75),init);
+  frame[75]=(crc>>8)&0xff; frame[76]=crc&0xff;
+  return crc;
+}
+
+function byteFrom(id,even){
+  const el=$(id); let s=el.value.trim();
+  let ok=s.length===2 && parseHex(s)!==null;
+  const v=ok?parseInt(s,16):null;
+  if(ok && even && (v&1)) ok=false;   // corpus: must be even
+  el.classList.toggle('bad',!ok);
+  return ok?v:null;
+}
+function hexFieldInto(id,off,len,lowEven){
+  const el=$(id); let s=el.value.trim().toLowerCase();
+  let ok=s.length===len*2 && parseHex(s)!==null;
+  if(ok && lowEven && (parseInt(s.substr((len-1)*2,2),16)&1)) ok=false; // corpus: low byte even
+  el.classList.toggle('bad',!ok);
+  if(ok) for(let i=0;i<len;i++) frame[off+i]=parseInt(s.substr(i*2,2),16);
+}
+
+// ---- render ------------------------------------------------------------------
+function render(crc){
+  // hex string, colored per byte
+  const hexEl=$('hex'); hexEl.innerHTML='';
+  for(let i=0;i<77;i++){
+    const sp=document.createElement('span');
+    sp.className='b k-'+catOf(i);
+    sp.textContent=hx(frame[i]);
+    sp.title='byte '+i;
+    hexEl.appendChild(sp);
+    hexEl.appendChild(document.createTextNode(' '));
+  }
+  $('crcpill').textContent='CRC 0x'+crc.toString(16).padStart(4,'0').toUpperCase();
+
+  // human time
+  const ts=be(16,4);
+  $('tshuman').textContent=new Date(ts*1000).toISOString().replace('.000','')+'  (epoch '+ts+')';
+  const up=be(24,4);
+  $('uphuman').textContent='= '+(up/86400).toFixed(1)+' d';
+
+  // selector derived — class is a closed-form function of the selector
+  const idx=parseInt($('sel').value,10), m=SELMAP[idx];
+  const b65=idx&0xff, ruleClass=(idx+8)>>4, ruleOk=(ruleClass===m[0]);
+  const ruleTxt = ruleOk ? 'class = (sel+8)>>4 = '+ruleClass+' ✓'
+    : 'RULE BROKEN: (sel+8)>>4='+ruleClass+' ≠ '+m[0];
+  $('selderived').textContent=
+    `class ${m[0]} (b60-61 ${be(60,2).toString(16).padStart(4,'0')}) `+
+    `· cc_len ${m[1]} · b64=${(idx>>8)} b65=0x${hx(b65)} · n=${m[2]} · ${ruleTxt}`;
+
+  // breakdown table — [off, len, name, decoded, meaning, confidence]
+  // confidence: 'k' known · 'p' structure known / semantics uncertain · 'o' opaque
+  const rows=[
+    [0,3,'sync','80 ff 2a marker',
+      'GFSK frame sync word — marks the start of every GridStream frame.','k'],
+    [3,1,'frame type','0xD5 status push',
+      '0xD5 = unsolicited periodic status-push beacon (plaintext).','k'],
+    [4,1,'reserved','0x00',
+      'Reserved; always 0x00 in this frame type — not a flags byte.','k'],
+    [5,1,'length','0x47 = 71',
+      'Payload length: 71 bytes follow this byte (fixed for this frame).','k'],
+    [6,1,'CI', frame[6]===0x51?'0x51 scheduled':'0x55 event',
+      'Comm/Info: 0x51 = scheduled periodic push, 0x55 = event-triggered push.','k'],
+    [7,4,'dst collector', hexr(7,4),
+      'Destination address — the collector / aggregator the meter reports to.','k'],
+    [11,4,'src / LAN ID', hexr(11,4),
+      "Source address — this meter's own network ID (the LAN ID).",'k'],
+    [15,1,'b15 opaque', '0x'+hx(frame[15]),
+      'Uncharacterized — but corpus shows it is ALWAYS even (LSB=0, 128 distinct values). Enforced even.','o'],
+    [16,4,'timestamp', be(16,4)+' ('+new Date(be(16,4)*1000).toISOString().slice(0,19)+'Z)',
+      'Meter wall-clock at transmit — Unix epoch seconds, big-endian.','k'],
+    [20,1,'sep','0x00',
+      'Separator; constant 0x00.','k'],
+    [21,1,'b21', String(frame[21]),
+      'Small enum {0,1,2}, almost always 1; purpose not yet determined.','p'],
+    [22,2,'digest', hexr(22,2),
+      'Opaque 2-byte field (3180 distinct) — likely a checksum/MAC over the body. Not cracked. Corpus: low byte (b23) always even — enforced.','o'],
+    [24,4,'uptime', be(24,4)+' s ('+(be(24,4)/86400).toFixed(1)+' d)',
+      'Seconds since meter boot — big-endian.','k'],
+    [28,2,'BER a4 len','tag 0xA4 len 0x0B (11)',
+      'ASN.1/BER context tag [4] (constructed), length 11 — the DLMS/COSEM-derived wrapper skeleton.','p'],
+    [30,3,'const','01 01 fe',
+      'Constant 01 01 fe inside the BER wrapper; meaning unknown.','o'],
+    [33,4,'src echo', hexr(33,4),
+      'Repeats the meter source address (11-14).','k'],
+    [37,1,'sep','0x00',
+      'Separator; constant 0x00.','k'],
+    [38,4,'src echo', hexr(38,4),
+      'Repeats the meter source address a second time.','k'],
+    [42,4,'const','00 01 03 25',
+      'Constant 00 01 03 25; meaning unknown.','o'],
+    [46,11,'zero pad','all 0x00 (incl value hi-byte)',
+      'Always-zero region; the high byte of the value field lives here (so value is effectively 3 bytes).','k'],
+    [57,3,'value', be(57,3)+' (raw 3-byte BE)',
+      'Plaintext scalar. Corpus: always a multiple of 1000, range 22000–1002000 (enforced). NOT a cumulative kWh register — it rises AND falls; no meter is monotone. True energy rides encrypted in the 0xD2/CI=0x52 frames. Exact quantity unknown.','p'],
+    [60,2,'class id', be(60,2)+' (= (sel+8)>>4)',
+      'Closed-form bin of the selector: class = (selector + 8) >> 4, exact for 97/97 observed selectors. Fully determined by the selector — cannot be set independently and carries no extra information. NOT a semantic COSEM class.','k'],
+    [62,1,'cc tag','0x09 (A-XDR)',
+      'A-XDR / COSEM octet-string tag 0x09, from the EU protocol vocabulary.','p'],
+    [63,1,'cc len', String(frame[63]),
+      'Content length {2,3,4}, tied to the selected object.','p'],
+    [64,1,'sel hi', String(frame[64]),
+      'High byte of the 16-bit object selector (rolls to 1 for selector ≥ 256).','k'],
+    [65,1,'sel lo', '0x'+hx(frame[65])+' → class (sel+8)>>4 = '+(((frame[64]<<8|frame[65])+8)>>4)+(((((frame[64]<<8|frame[65])+8)>>4)===frame[61])?' ✓':' ✗'),
+      'Low byte of the 16-bit selector — the true object axis. The class is derived from it by class = (selector + 8) >> 4 (16-wide bins offset by 8), exact across all 97 observed selectors. The crafter only emits observed selectors. Object SEMANTICS (what physical quantity each selector names) remain unknown.','k'],
+    [66,5,'obis prefix','20 30 2d 84 80',
+      'Constant OBIS-like slot prefix — DLMS/COSEM vocabulary skeleton.','p'],
+    [71,1,'seq b71', String(frame[71]),
+      'Counter — corpus shows a complete 0–23 set (no gaps); enforced to 0–23. Not the tx-hour. Likely a slot/sequence index mod 24.','p'],
+    [72,1,'nonce b72', '0x'+hx(frame[72]),
+      'Full-range byte (all 256 values observed) — likely a nonce/sequence low byte.','o'],
+    [73,1,'DIF', '0x'+hx(frame[73]),
+      'M-Bus DIF-shaped (0x11-0x20) but does NOT decode as real M-Bus (97% structurally invalid). Free low nibble, independent of object & VIF — effectively entropy, not a data-shape descriptor.','o'],
+    [74,1,'VIF', '0x'+hx(frame[74]),
+      'M-Bus VIF-shaped (multiples of 0x10) but followed only by the CRC — there is no value after it, and it is independent of everything. Not a real unit descriptor.','o'],
+    [75,2,'CRC-16', '0x'+(be(75,2).toString(16).padStart(4,'0')),
+      'CRC-16/CCITT (poly 0x1021, init 0x'+($('crcinit').value.trim().toUpperCase()||'142A')+') over bytes 6-74, big-endian. PSE uses init 0x142A; verified on all 5199 corpus frames.','k'],
+  ];
+  const CONF={k:['known','cf-k'],p:['partial','cf-p'],o:['opaque','cf-o']};
+  const tb=$('bd'); tb.innerHTML='';
+  for(const [off,len,name,dec,meaning,conf] of rows){
+    const tr=document.createElement('tr');
+    const cat=catOf(off);
+    const [clabel,ccls]=CONF[conf];
+    tr.innerHTML=
+      `<td class="off">${off}${len>1?'-'+(off+len-1):''}</td>`+
+      `<td><span class="tag k-${cat}"></span>${name}</td>`+
+      `<td class="hex">${hexr(off,len)}</td>`+
+      `<td>${dec}</td>`+
+      `<td class="mean"><span class="cf ${ccls}" title="${clabel}">${clabel}</span>${meaning}</td>`;
+    tb.appendChild(tr);
+  }
+}
+function hexr(off,len){let s=[];for(let i=0;i<len;i++)s.push(hx(frame[off+i]));return s.join(' ');}
+
+// ---- rebuild orchestration ---------------------------------------------------
+function rebuild(){ const crc=readControls(); render(crc); }
+
+// ---- populate selects --------------------------------------------------------
+function populate(){
+  const sel=$('sel');
+  Object.keys(SELMAP).map(Number).sort((a,b)=>a-b).forEach(idx=>{
+    const m=SELMAP[idx];
+    const o=document.createElement('option');
+    o.value=idx;
+    o.textContent=`${idx} → class ${m[0]}, len ${m[1]} (n=${m[2]})`;
+    if(idx===196) o.selected=true;     // most common object
+    sel.appendChild(o);
+  });
+  const dif=$('dif');
+  DIFS.forEach(d=>{const o=document.createElement('option');o.value=d;
+    o.textContent='0x'+hx(d);if(d===0x11)o.selected=true;dif.appendChild(o);});
+  const vif=$('vif');
+  VIFS.forEach(v=>{const o=document.createElement('option');o.value=v;
+    o.textContent='0x'+hx(v);if(v===0x40)o.selected=true;vif.appendChild(o);});
+}
+
+// ---- timestamp clock ---------------------------------------------------------
+function tickClock(){
+  if(!$('tsfreeze').checked){
+    $('ts').value=Math.floor(Date.now()/1000);
+    rebuild();
+  }
+}
+
+// ---- wiring ------------------------------------------------------------------
+function wire(){
+  ['ci','dst','src','ts','b21','dig','uptime','val','sel','b71','b72','dif','vif','b15','crcinit']
+    .forEach(id=>{$(id).addEventListener('input',rebuild);$(id).addEventListener('change',rebuild);});
+
+  const randEven=()=>hx(randByte()&0xfe);  // corpus-even byte
+  document.querySelectorAll('[data-rnd]').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      const t=btn.dataset.rnd;
+      if(t==='b15') $('b15').value=randEven();                  // even only
+      if(t==='dig') $('dig').value=hx(randByte())+randEven();   // low byte even
+      if(t==='b72') $('b72').value=hx(randByte());              // full range
+      if(t==='crcdef') $('crcinit').value='142A';               // reset to PSE init
+      rebuild();
+    });
+  });
+
+  $('randall').addEventListener('click',()=>{
+    $('b15').value=randEven();
+    $('dig').value=hx(randByte())+randEven();
+    $('b71').value=String(Math.floor(Math.random()*24)); // 0..23
+    $('b72').value=hx(randByte());
+    rebuild();
+  });
+
+  $('copy').addEventListener('click',()=>{
+    const s=Array.from(frame,hx).join('');
+    navigator.clipboard?.writeText(s);
+    const b=$('copy'); const t=b.textContent; b.textContent='copied'; setTimeout(()=>b.textContent=t,900);
+  });
+
+  $('loadex').addEventListener('click',()=>{
+    // exact captured frame -> controls; CRC must render 0xB932
+    $('tsfreeze').checked=true;
+    $('ci').value='81';
+    $('dst').value='900001c3';
+    $('src').value='900000dd';
+    $('b15').value='00';
+    $('ts').value='1780127833';
+    $('b21').value='1';
+    $('dig').value='5f04';
+    $('uptime').value='18498252';
+    $('val').value='609000';
+    $('sel').value='243';
+    $('b71').value='16';
+    $('b72').value='f4';
+    $('dif').value='17';
+    $('vif').value='64';
+    $('crcinit').value='142A';
+    rebuild();
+  });
+}
+
+// ---- boot --------------------------------------------------------------------
+populate();
+wire();
+$('ts').value=Math.floor(Date.now()/1000);
+rebuild();
+setInterval(tickClock,1000);
+</script>
+</body>
+</html>

@@ -41,6 +41,7 @@ tools/          gridstream_parser.py      — the reference frame parser (shared
                 anonymize_corpus.py       — scrub a raw capture into a publishable corpus
                 validate_protocol_doc.py  — spec-as-code validator (run against your own capture)
 visualizations/ packet-analyzer.html      — interactive in-browser frame decoder
+                packet-crafter.html       — interactive byte-by-byte view of how fields compose a 0xD5 beacon
                 mesh_topology.html        — pre-rendered mesh graph from capture/corpus.log (open it)
 capture/        corpus.log, README.md     — the anonymized corpus + receive-only SDR reproduction
 ```
@@ -57,6 +58,14 @@ capture/        corpus.log, README.md     — the anonymized corpus + receive-on
   python tools/gridstream_parser.py 80FF2A...      # one frame, fully labelled
   cat capture/corpus.log | python tools/gridstream_parser.py   # a whole log
   ```
+- **Build a frame to see how the bytes fit:** open
+  [`visualizations/packet-crafter.html`](https://html-preview.github.io/?url=https://github.com/swannman/gridstream-protocol/blob/main/visualizations/packet-crafter.html)
+  in any browser — an interactive, byte-by-byte view of the `0xD5` status-push
+  beacon. Edit a field (address, timestamp, object selector, CRC init…) and watch
+  the frame and its CRC recompute live, with a per-byte breakdown of what each
+  field means and how confident the interpretation is. Useful for building
+  intuition about field relationships — e.g. how the derived `class = (selector +
+  8) >> 4` bin tracks the selector.
 - **Watch a live capture:** stream a growing capture log (or a piped decoder)
   through the parser, one compact line per frame:
   ```bash

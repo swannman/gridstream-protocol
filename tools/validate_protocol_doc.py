@@ -150,6 +150,9 @@ CLUSTER_SPECS = {
         addr_fields=[(7,10,"dst"),(11,14,"src")],
         crc_offsets=(75,76),
         cosem_class_id_offset=60,
+        # 16-bit object selector at 64-65; the class field at 60-61 is the
+        # deterministic bin class = (selector + 8) >> 4 (verified 97/97 selectors).
+        selector_offset=64, class_selector_invariant=True,
         idfield_offset=71, idfield_role="seqnonce",  # bytes 71-72: per-packet seq/nonce
         wmbus_dif_offset=73,        # DIF at byte 73
         wmbus_vif_offset=74,        # VIF at byte 74
@@ -362,6 +365,19 @@ def validate_packet(p, spec):
         # OR the rare 0xFA00-0xFAFF range (Association)
         if not (0x0001 <= cid <= 0x0070 or 0xFA00 <= cid <= 0xFAFF):
             violations.append(f"COSEM class_id at {cid_off} = 0x{cid:04X} not in standard range")
+
+    # Class/selector invariant: the class field is a deterministic bin of the
+    # 16-bit object selector — class = (selector + 8) >> 4.
+    sel_off = spec.get("selector_offset")
+    if (spec.get("class_selector_invariant") and cid_off is not None
+            and sel_off is not None and sel_off + 2 <= len(p)):
+        cid = (p[cid_off] << 8) | p[cid_off+1]
+        sel = (p[sel_off] << 8) | p[sel_off+1]
+        expected = (sel + 8) >> 4
+        if cid != expected:
+            violations.append(
+                f"class/selector invariant broken: selector {sel} at {sel_off} "
+                f"implies class {expected}, but class field at {cid_off} = {cid}")
 
     # The 2-byte id field (idfield_offset) has no fixed per-packet value range:
     # in directed frames it is a per-packet seq/nonce, in the broadcast frame a

@@ -4,8 +4,10 @@
 Canonical, dependency-free decoder for Landis+Gyr GridStream sub-GHz RF frames
 as deployed by Puget Sound Energy (PSE). It turns a captured frame (hex) into a
 structured, fully-labelled decode: header, addresses, CI class, the COSEM-style
-application layer (class_id, L+G calling convention, OBIS-like prefix, per-packet
-seq/nonce, DIF/VIF), and CRC verification.
+application layer (16-bit object selector, the derived class bin, L+G calling
+convention, OBIS-like prefix, per-packet seq/nonce, DIF/VIF), and CRC verification.
+In len-71 status-push frames the class field at 60-61 is a deterministic bin of
+the selector (``class = (selector + 8) >> 4``), not an independent COSEM class.
 
 This module is the executable companion to ``docs/gridstream-protocol.md``: the
 field offsets and on-the-wire constants encoded here are exactly those documented
@@ -94,23 +96,6 @@ CI_NAMES = {
 }
 # High-nibble frame class (doc: CI byte, high nibble = frame class, ✓).
 CI_CLASS = {0x2: "directed data", 0x3: "broadcast", 0x5: "status push", 0x8: "bulk transfer"}
-
-# COSEM interface classes (doc: Application Layer → COSEM class IDs).
-COSEM_CLASSES = {
-    8: "Clock",
-    9: "Script_table",
-    10: "Schedule",
-    11: "Special_days_table",
-    12: "Association_SN",
-    13: "L+G vendor extension",
-    14: "L+G vendor extension",
-    15: "Association_LN",
-    16: "L+G vendor extension",
-    17: "SAP_assignment",
-    18: "Image_transfer",
-    19: "IEC_local_port_setup",
-    20: "L+G vendor extension",
-}
 
 DIF_DATA_LENGTH = {
     0x0: "no data", 0x1: "8-bit int", 0x2: "16-bit int", 0x3: "24-bit int",
@@ -317,8 +302,8 @@ _LAYOUTS = {
         (37, 1, "sep", "const0"), (38, 4, "src_repeat", "lan"), (42, 1, "sep", "const0"),
         (43, 3, "routing_end (01 03 25)", "bytes"), (46, 11, "zero_pad", "bytes"),
         (57, 3, "payload_transition", "bytes"), (60, 2, "class_id", "class_id"),
-        (62, 1, "cc_tag", "cc09"), (63, 1, "cc_len", "cclen"), (64, 1, "sep", "u8"),
-        (65, 1, "selector", "u8"), (66, 5, "obis_prefix", "obis"),
+        (62, 1, "cc_tag", "cc09"), (63, 1, "cc_len", "cclen"),
+        (64, 2, "selector", "selector16"), (66, 5, "obis_prefix", "obis"),
         (71, 2, "seq_nonce", "seqnonce"), (73, 1, "DIF", "dif"), (74, 1, "VIF", "vif"),
         (75, 2, "crc", "crc"),
     ],
@@ -408,10 +393,10 @@ class FieldInfo:
 
 @dataclass
 class Cosem:
-    class_id: Optional[int] = None
-    class_name: Optional[str] = None
+    class_id: Optional[int] = None        # raw 2-byte field at the class offset
     calling_convention: Optional[str] = None   # e.g. "09 03"
-    selector: Optional[int] = None
+    selector: Optional[int] = None        # 16-bit object selector (the true object axis)
+    selector_class_ok: Optional[bool] = None   # selector→class invariant held (len-71)
     obis_prefix: Optional[str] = None
     obis_ok: Optional[bool] = None
     seq_nonce: Optional[str] = None
@@ -423,11 +408,12 @@ class Cosem:
         out = {}
         if self.class_id is not None:
             out["class_id"] = f"0x{self.class_id:04X} ({self.class_id})"
-            out["class_name"] = self.class_name
         if self.calling_convention:
             out["calling_convention"] = self.calling_convention
         if self.selector is not None:
-            out["selector"] = f"0x{self.selector:02X}"
+            out["selector"] = f"0x{self.selector:04X} ({self.selector})"
+            if self.selector_class_ok is not None:
+                out["selector_class_ok"] = self.selector_class_ok
         if self.obis_prefix is not None:
             out["obis_prefix"] = self.obis_prefix
             out["obis_ok"] = self.obis_ok
@@ -553,9 +539,8 @@ def _render(p: bytes, layout: list, header_len: int, frame: ParsedFrame) -> None
             frame.addresses["dst"] = hexs
         elif kind == "class_id":
             cid = (raw[0] << 8) | raw[1]
-            nm = COSEM_CLASSES.get(cid, "unknown / out-of-range")
-            interp = f"{cid} = {nm}"
-            cosem.class_id, cosem.class_name = cid, nm
+            interp = f"{cid} (class bin; derived from selector)"
+            cosem.class_id = cid
             has_cosem = True
         elif kind == "cc09":
             ok = raw[0] == 0x09
@@ -588,6 +573,18 @@ def _render(p: bytes, layout: list, header_len: int, frame: ParsedFrame) -> None
             interp = f"unit class hi-nibble 0x{raw[0] >> 4:X}" + ("" if ok else " (low nibble != 0)")
             cosem.vif = v
             has_cosem = True
+        elif kind == "selector16":
+            sel = (raw[0] << 8) | raw[1]
+            cosem.selector = sel
+            has_cosem = True
+            expected_bin = (sel + 8) >> 4
+            if cosem.class_id is not None:
+                ok = cosem.class_id == expected_bin
+                cosem.selector_class_ok = ok
+                interp = (f"selector {sel} (class bin (sel+8)>>4 = {expected_bin}"
+                          + ("" if ok else f", but class field = {cosem.class_id}!") + ")")
+            else:
+                interp = f"selector {sel} (class bin (sel+8)>>4 = {expected_bin})"
         elif kind == "u8":
             interp = str(raw[0])
             if name == "selector":
@@ -685,7 +682,7 @@ def parse_frame(frame_input) -> ParsedFrame:
             frame.cosem_bearing = True
             cid = (p[scan["class_id_off"]] << 8) | p[scan["class_id_off"] + 1]
             cosem = Cosem(
-                class_id=cid, class_name=COSEM_CLASSES.get(cid, "unknown"),
+                class_id=cid,
                 calling_convention=f"09 {scan['cc_len']:02X}")
             frame.cosem = cosem
             frame.warnings.append(
@@ -730,11 +727,14 @@ def format_frame(f: ParsedFrame) -> str:
         out.append("  COSEM")
         c = f.cosem
         if c.class_id is not None:
-            out.append(f"    class_id  0x{c.class_id:04X} ({c.class_id})  {c.class_name}")
+            out.append(f"    class_id  0x{c.class_id:04X} ({c.class_id})  (class bin; derived from selector)")
         if c.calling_convention:
             out.append(f"    calling   {c.calling_convention}")
         if c.selector is not None:
-            out.append(f"    selector  0x{c.selector:02X}")
+            sel_line = f"    selector  0x{c.selector:04X} ({c.selector})"
+            if c.selector_class_ok is not None:
+                sel_line += "  [class invariant ok]" if c.selector_class_ok else "  [class invariant FAIL]"
+            out.append(sel_line)
         if c.obis_prefix is not None:
             out.append(f"    obis      {c.obis_prefix}{_mark(c.obis_ok)}")
         if c.object_id is not None:

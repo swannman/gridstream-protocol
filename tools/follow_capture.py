@@ -64,8 +64,10 @@ def compact_line(f: ParsedFrame, ts: str) -> str:
     dst = f.addresses.get("dst", "")
     cols.append(f"src {src:<8}" if src else " " * 12)
     cols.append(f"dst {dst:<14}" if dst else " " * 18)
-    if f.cosem and f.cosem.class_id is not None:
-        cols.append(f"cls {f.cosem.class_id} {f.cosem.class_name}")
+    if f.cosem and f.cosem.selector is not None:
+        cols.append(f"sel {f.cosem.selector}")
+    elif f.cosem and f.cosem.class_id is not None:
+        cols.append(f"cls {f.cosem.class_id}")
     elif f.ci_name and f.ci_name != "unknown":
         cols.append(f"({f.ci_name})")
     return "  ".join(cols).rstrip()
